@@ -59,7 +59,9 @@ func ensure_required_stdlib_symbols_are_cached() -> void:
 	for one_symbol_file_name in REQUIRED_STDLIB_SYMBOL_FILE_NAMES:
 		var cache_path := "%s/%s" % [XSCHEM_STDLIB_CACHE_DIR, one_symbol_file_name]
 		if FileAccess.file_exists(cache_path):
+			print("[spice3d] xschem stdlib cache HIT: %s" % one_symbol_file_name)
 			continue
+		print("[spice3d] xschem stdlib cache MISS, fetching: %s" % one_symbol_file_name)
 		await download_one_stdlib_symbol_into_cache(one_symbol_file_name, cache_path)
 
 
@@ -67,6 +69,7 @@ func download_one_stdlib_symbol_into_cache(symbol_file_name: String, cache_desti
 	var http_request := HTTPRequest.new()
 	add_child(http_request)
 	var full_url := XSCHEM_UPSTREAM_RAW_URL_TEMPLATE % [XSCHEM_UPSTREAM_GIT_SHA, symbol_file_name]
+	var fetch_start_milliseconds := Time.get_ticks_msec()
 	var request_error := http_request.request(full_url)
 	if request_error != OK:
 		push_error("HTTPRequest.request returned %d for %s" % [request_error, full_url])
@@ -83,6 +86,9 @@ func download_one_stdlib_symbol_into_cache(symbol_file_name: String, cache_desti
 	var cache_file := FileAccess.open(cache_destination_path, FileAccess.WRITE)
 	cache_file.store_buffer(response_body)
 	cache_file.close()
+	var fetch_duration_milliseconds := Time.get_ticks_msec() - fetch_start_milliseconds
+	print("[spice3d] xschem stdlib fetched %s (%d bytes, %d ms)" % [
+			symbol_file_name, response_body.size(), fetch_duration_milliseconds])
 
 
 func copy_file_via_godot_filesystem(source_path: String, destination_path: String) -> void:

@@ -37,7 +37,11 @@ Run the following command to download godot-cpp:
 
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
-env.Append(CPPPATH=["src/", "third_party/xschem2spice/src/"])
+env.Append(CPPPATH=["src/", "third_party/xschem2spice/src/", "third_party/zstd/lib/"])
+
+# zstd is decompress-only here; the x86_64 assembly path is excluded so the
+# same source list compiles for web (wasm32) and any non-x86 native target.
+env.Append(CPPDEFINES=["ZSTD_DISABLE_ASM=1"])
 
 # xschem2spice ships a tiny CLI driver in xschem2spice.c that has its own
 # main() — exclude it. We link the library sources directly into the
@@ -47,13 +51,20 @@ xschem2spice_sources = [
     if str(f).split("/")[-1] != "xschem2spice.c"
 ]
 
+zstd_decompress_sources = (
+    Glob("third_party/zstd/lib/common/*.c")
+    + Glob("third_party/zstd/lib/decompress/*.c")
+)
+
 sources = (
     Glob("src/*.cpp")
     + Glob("src/sim/*.cpp")
     + Glob("src/sim/native/*.cpp")
     + Glob("src/sim/web/*.cpp")
     + Glob("src/scene/*.cpp")
+    + Glob("src/pdk/*.cpp")
     + xschem2spice_sources
+    + zstd_decompress_sources
 )
 
 if env["target"] in ["editor", "template_debug"]:
