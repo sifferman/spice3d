@@ -5,6 +5,53 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — Extruded fills, billboard text, interconnecting line caps
+
+User feedback pass:
+
+### Lines extrude their caps by one full diameter
+
+Each capsule's pole-to-pole height = `segment_length + 4 * radius`,
+so the rounded endcaps protrude 2r (= 1 diameter) past each
+segment endpoint. Adjacent line segments sharing an endpoint now
+overlap solidly at the joint instead of leaving a faint seam.
+
+### Fills are extruded ("coaster" geometry, not a flat disc)
+
+Filled polygons now build an `ArrayMesh` with three regions
+sharing a vertex array of 2N positions (N on top at
+`extrusion_height`, N on the floor at y=0):
+
+- Top face: triangulation from `Geometry2D::triangulate_polygon`
+- Bottom face: same triangles, flipped winding
+- Side walls: 2 triangles per polygon edge
+
+Cull-disabled material so the top reads from underneath the
+schematic plane too.
+
+### Pin boxes auto-fill
+
+In xschem the small B records carrying `name=` are pins and
+render as solid rectangles. xschem2spice now flags `box.filled =
+1` whenever a B record has `name=`. Filled boxes go through
+`BoxMesh` extrusion (size = width × extrusion_height × depth,
+center y = extrusion_height/2) — solid pin nubs sitting on top
+of the schematic plane.
+
+### Text labels switched to billboard
+
+Lying-flat Label3D was readable but oriented upside-down under
+the orbit camera's top-down view (camera up resolves to a
+direction opposite the label's vertical when looking straight
+down — a proper rotation can't fix all three constraints
+simultaneously). Switched to `BILLBOARD_ENABLED` plus
+`FLAG_DISABLE_DEPTH_TEST`: labels always face the camera, always
+read right-side-up, sit above the geometry. Pixel size bumped
+from `0.25 * vertical_size_factor` to `1.5 * vertical_size_factor`
+so labels are legible at the default orbit distance.
+
+---
+
 ## 2026-05-23 — Filled polygons + smooth-tube arcs
 
 Two follow-ups after the user looked at the deployed render:

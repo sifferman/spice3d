@@ -121,7 +121,8 @@ constexpr double WIRE_STROKE_RADIUS_IN_WORLD_UNITS = 2.0;
 constexpr double DRAWING_OUTLINE_STROKE_RADIUS_IN_WORLD_UNITS = 1.0;
 constexpr double COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS = 60.0;
 constexpr double ARC_TESSELLATION_DEGREES_PER_CYLINDER_SEGMENT = 6.0;
-constexpr double TEXT_PIXEL_SIZE_PER_XSCHEM_VERTICAL_SIZE_FACTOR = 0.25;
+constexpr double TEXT_PIXEL_SIZE_PER_XSCHEM_VERTICAL_SIZE_FACTOR = 1.5;
+constexpr double FILLED_DRAWING_EXTRUSION_HEIGHT_IN_WORLD_UNITS = 4.0;
 
 godot::Vector3 schematic_xy_to_lying_flat_world_position(double schematic_x, double schematic_y) {
 	constexpr double table_surface_world_y = 0.0;
@@ -210,9 +211,12 @@ void add_capsule_segment_between_two_schematic_points(
 	const double segment_length_in_world = segment_direction_in_world.length();
 	if (segment_length_in_world <= 0.0) return;
 
+	const double capsule_total_height_with_extended_caps =
+			segment_length_in_world + 4.0 * capsule_stroke_radius;
+
 	godot::MeshInstance3D *capsule_mesh_instance = memnew(godot::MeshInstance3D);
 	capsule_mesh_instance->set_mesh(build_capsule_mesh_with_radius_and_total_height(
-			capsule_stroke_radius, segment_length_in_world));
+			capsule_stroke_radius, capsule_total_height_with_extended_caps));
 	capsule_mesh_instance->set_material_override(capsule_material);
 
 	godot::Transform3D capsule_transform;
@@ -316,6 +320,43 @@ void add_drawing_box_outline_in_global_coordinates(
 	}
 }
 
+void add_drawing_box_extruded_filled_mesh_in_global_coordinates(
+		godot::Node3D *parent_node,
+		const DrawingBox &box,
+		const godot::Ref<godot::Material> &fill_material) {
+	const double box_width = std::abs(box.x2 - box.x1);
+	const double box_depth = std::abs(box.y2 - box.y1);
+	if (box_width <= 0.0 || box_depth <= 0.0) return;
+	const double box_center_schematic_x = (box.x1 + box.x2) * 0.5;
+	const double box_center_schematic_y = (box.y1 + box.y2) * 0.5;
+
+	godot::Ref<godot::BoxMesh> filled_box_mesh;
+	filled_box_mesh.instantiate();
+	filled_box_mesh->set_size(godot::Vector3(
+			box_width, FILLED_DRAWING_EXTRUSION_HEIGHT_IN_WORLD_UNITS, box_depth));
+
+	godot::MeshInstance3D *filled_box_mesh_instance = memnew(godot::MeshInstance3D);
+	filled_box_mesh_instance->set_mesh(filled_box_mesh);
+	filled_box_mesh_instance->set_material_override(fill_material);
+	godot::Vector3 box_center_world = schematic_xy_to_lying_flat_world_position(
+			box_center_schematic_x, box_center_schematic_y);
+	box_center_world.y = FILLED_DRAWING_EXTRUSION_HEIGHT_IN_WORLD_UNITS * 0.5;
+	filled_box_mesh_instance->set_position(box_center_world);
+	parent_node->add_child(filled_box_mesh_instance);
+}
+
+void add_drawing_box_in_global_coordinates(
+		godot::Node3D *parent_node,
+		const DrawingBox &box,
+		const godot::Ref<godot::Material> &outline_material,
+		const godot::Ref<godot::Material> &fill_material) {
+	if (box.filled) {
+		add_drawing_box_extruded_filled_mesh_in_global_coordinates(parent_node, box, fill_material);
+	} else {
+		add_drawing_box_outline_in_global_coordinates(parent_node, box, outline_material);
+	}
+}
+
 void add_drawing_polygon_outline_in_global_coordinates(
 		godot::Node3D *parent_node,
 		const DrawingPolygon &polygon,
@@ -342,43 +383,70 @@ size_t polygon_vertex_count_with_repeated_closing_vertex_stripped(const DrawingP
 	return paired_count;
 }
 
-void add_drawing_polygon_filled_mesh_in_global_coordinates(
+void add_drawing_polygon_extruded_filled_mesh_in_global_coordinates(
 		godot::Node3D *parent_node,
 		const DrawingPolygon &polygon,
 		const godot::Ref<godot::Material> &fill_material) {
-	const size_t unique_vertex_count = polygon_vertex_count_with_repeated_closing_vertex_stripped(polygon);
+	const int unique_vertex_count = static_cast<int>(
+			polygon_vertex_count_with_repeated_closing_vertex_stripped(polygon));
 	if (unique_vertex_count < 3) return;
 
 	godot::PackedVector2Array vertices_for_triangulation;
-	vertices_for_triangulation.resize(static_cast<int>(unique_vertex_count));
-	for (size_t i = 0; i < unique_vertex_count; ++i) {
-		vertices_for_triangulation[static_cast<int>(i)] =
+	vertices_for_triangulation.resize(unique_vertex_count);
+	for (int i = 0; i < unique_vertex_count; ++i) {
+		vertices_for_triangulation[i] =
 				godot::Vector2(polygon.vertex_xs[i], polygon.vertex_ys[i]);
 	}
-	const godot::PackedInt32Array triangle_indices =
+	const godot::PackedInt32Array top_face_triangle_indices =
 			godot::Geometry2D::get_singleton()->triangulate_polygon(vertices_for_triangulation);
-	if (triangle_indices.is_empty()) return;
+	if (top_face_triangle_indices.is_empty()) return;
 
-	godot::PackedVector3Array vertices_in_world;
-	vertices_in_world.resize(static_cast<int>(unique_vertex_count));
-	for (size_t i = 0; i < unique_vertex_count; ++i) {
-		vertices_in_world[static_cast<int>(i)] = schematic_xy_to_lying_flat_world_position(
+	godot::PackedVector3Array extruded_vertices;
+	extruded_vertices.resize(2 * unique_vertex_count);
+	for (int i = 0; i < unique_vertex_count; ++i) {
+		const godot::Vector3 flat_position = schematic_xy_to_lying_flat_world_position(
 				polygon.vertex_xs[i], polygon.vertex_ys[i]);
+		extruded_vertices[i] = godot::Vector3(
+				flat_position.x, FILLED_DRAWING_EXTRUSION_HEIGHT_IN_WORLD_UNITS, flat_position.z);
+		extruded_vertices[unique_vertex_count + i] = flat_position;
+	}
+
+	godot::PackedInt32Array combined_triangle_indices;
+	const int top_index_count = top_face_triangle_indices.size();
+	for (int i = 0; i < top_index_count; ++i) {
+		combined_triangle_indices.push_back(top_face_triangle_indices[i]);
+	}
+	for (int i = 0; i < top_index_count; i += 3) {
+		combined_triangle_indices.push_back(unique_vertex_count + top_face_triangle_indices[i + 0]);
+		combined_triangle_indices.push_back(unique_vertex_count + top_face_triangle_indices[i + 2]);
+		combined_triangle_indices.push_back(unique_vertex_count + top_face_triangle_indices[i + 1]);
+	}
+	for (int i = 0; i < unique_vertex_count; ++i) {
+		const int top_a = i;
+		const int top_b = (i + 1) % unique_vertex_count;
+		const int bottom_a = unique_vertex_count + top_a;
+		const int bottom_b = unique_vertex_count + top_b;
+		combined_triangle_indices.push_back(top_a);
+		combined_triangle_indices.push_back(top_b);
+		combined_triangle_indices.push_back(bottom_b);
+		combined_triangle_indices.push_back(top_a);
+		combined_triangle_indices.push_back(bottom_b);
+		combined_triangle_indices.push_back(bottom_a);
 	}
 
 	godot::Array surface_arrays;
 	surface_arrays.resize(godot::Mesh::ARRAY_MAX);
-	surface_arrays[godot::Mesh::ARRAY_VERTEX] = vertices_in_world;
-	surface_arrays[godot::Mesh::ARRAY_INDEX] = triangle_indices;
+	surface_arrays[godot::Mesh::ARRAY_VERTEX] = extruded_vertices;
+	surface_arrays[godot::Mesh::ARRAY_INDEX] = combined_triangle_indices;
 
-	godot::Ref<godot::ArrayMesh> filled_polygon_mesh;
-	filled_polygon_mesh.instantiate();
-	filled_polygon_mesh->add_surface_from_arrays(godot::Mesh::PRIMITIVE_TRIANGLES, surface_arrays);
+	godot::Ref<godot::ArrayMesh> extruded_polygon_mesh;
+	extruded_polygon_mesh.instantiate();
+	extruded_polygon_mesh->add_surface_from_arrays(godot::Mesh::PRIMITIVE_TRIANGLES, surface_arrays);
 
-	godot::MeshInstance3D *filled_mesh_instance = memnew(godot::MeshInstance3D);
-	filled_mesh_instance->set_mesh(filled_polygon_mesh);
-	filled_mesh_instance->set_material_override(fill_material);
-	parent_node->add_child(filled_mesh_instance);
+	godot::MeshInstance3D *extruded_mesh_instance = memnew(godot::MeshInstance3D);
+	extruded_mesh_instance->set_mesh(extruded_polygon_mesh);
+	extruded_mesh_instance->set_material_override(fill_material);
+	parent_node->add_child(extruded_mesh_instance);
 }
 
 void add_drawing_polygon_in_global_coordinates(
@@ -387,7 +455,7 @@ void add_drawing_polygon_in_global_coordinates(
 		const godot::Ref<godot::Material> &outline_material,
 		const godot::Ref<godot::Material> &fill_material) {
 	if (polygon.filled) {
-		add_drawing_polygon_filled_mesh_in_global_coordinates(parent_node, polygon, fill_material);
+		add_drawing_polygon_extruded_filled_mesh_in_global_coordinates(parent_node, polygon, fill_material);
 	}
 	add_drawing_polygon_outline_in_global_coordinates(parent_node, polygon, outline_material);
 }
@@ -426,21 +494,13 @@ void add_drawing_text_label_in_global_coordinates(
 	godot::Label3D *label_3d = memnew(godot::Label3D);
 	label_3d->set_text(c_string_to_godot_string(text_label.text));
 	label_3d->set_modulate(text_color);
-	label_3d->set_billboard_mode(godot::BaseMaterial3D::BILLBOARD_DISABLED);
+	label_3d->set_billboard_mode(godot::BaseMaterial3D::BILLBOARD_ENABLED);
+	label_3d->set_draw_flag(godot::Label3D::FLAG_DISABLE_DEPTH_TEST, true);
 	label_3d->set_alpha_cut_mode(godot::Label3D::ALPHA_CUT_DISCARD);
 	label_3d->set_pixel_size(
 			text_label.vertical_size_factor * TEXT_PIXEL_SIZE_PER_XSCHEM_VERTICAL_SIZE_FACTOR);
-
-	const godot::Basis lay_label_flat_basis(
-			godot::Vector3(1.0, 0.0, 0.0), -Math_PI / 2.0);
-	const godot::Basis schematic_rotate_around_world_y_basis(
-			godot::Vector3(0.0, 1.0, 0.0),
-			-text_label.rotation_quarter_turns * Math_PI / 2.0);
-	godot::Transform3D label_transform;
-	label_transform.basis = schematic_rotate_around_world_y_basis * lay_label_flat_basis;
-	label_transform.origin = schematic_xy_to_lying_flat_world_position(
-			text_label.anchor_x, text_label.anchor_y);
-	label_3d->set_transform(label_transform);
+	label_3d->set_position(schematic_xy_to_lying_flat_world_position(
+			text_label.anchor_x, text_label.anchor_y));
 	parent_node->add_child(label_3d);
 }
 
@@ -459,7 +519,7 @@ void render_drawing_record_in_global_coordinates(
 		if constexpr (std::is_same_v<ConcreteRecordType, DrawingLineSegment>) {
 			add_drawing_line_segment_in_global_coordinates(parent_node, concrete_record, render_materials.outline);
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingBox>) {
-			add_drawing_box_outline_in_global_coordinates(parent_node, concrete_record, render_materials.outline);
+			add_drawing_box_in_global_coordinates(parent_node, concrete_record, render_materials.outline, render_materials.fill);
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingPolygon>) {
 			add_drawing_polygon_in_global_coordinates(parent_node, concrete_record, render_materials.outline, render_materials.fill);
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingArc>) {
