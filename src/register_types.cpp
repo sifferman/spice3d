@@ -7,17 +7,15 @@
 
 #include "spice3d_node.h"
 
-using namespace godot;
-
-void initialize_spice3d_module(ModuleInitializationLevel p_level) {
-	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
+void initialize_spice3d_module(godot::ModuleInitializationLevel module_initialization_level) {
+	if (module_initialization_level != godot::MODULE_INITIALIZATION_LEVEL_SCENE) {
 		return;
 	}
 	GDREGISTER_CLASS(spice3d::Spice3DNode);
 }
 
-void uninitialize_spice3d_module(ModuleInitializationLevel p_level) {
-	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
+void uninitialize_spice3d_module(godot::ModuleInitializationLevel module_initialization_level) {
+	if (module_initialization_level != godot::MODULE_INITIALIZATION_LEVEL_SCENE) {
 		return;
 	}
 }
@@ -25,15 +23,17 @@ void uninitialize_spice3d_module(ModuleInitializationLevel p_level) {
 extern "C" {
 
 GDExtensionBool GDE_EXPORT spice3d_library_init(
-		GDExtensionInterfaceGetProcAddress p_get_proc_address,
-		GDExtensionClassLibraryPtr p_library,
-		GDExtensionInitialization *r_initialization) {
-	GDExtensionBinding::InitObject init_obj(p_get_proc_address, p_library, r_initialization);
-	init_obj.register_initializer(initialize_spice3d_module);
-	init_obj.register_terminator(uninitialize_spice3d_module);
-	init_obj.set_minimum_library_initialization_level(MODULE_INITIALIZATION_LEVEL_SCENE);
-
-	return init_obj.init();
+		GDExtensionInterfaceGetProcAddress get_proc_address,
+		GDExtensionClassLibraryPtr library_pointer,
+		GDExtensionInitialization *initialization_out) {
+	godot::GDExtensionBinding::InitObject init_object(
+			get_proc_address,
+			library_pointer,
+			initialization_out);
+	init_object.register_initializer(initialize_spice3d_module);
+	init_object.register_terminator(uninitialize_spice3d_module);
+	init_object.set_minimum_library_initialization_level(godot::MODULE_INITIALIZATION_LEVEL_SCENE);
+	return init_object.init();
 }
 
 } // extern "C"

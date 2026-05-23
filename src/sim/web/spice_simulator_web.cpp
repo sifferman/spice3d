@@ -8,76 +8,78 @@
 namespace spice3d {
 namespace web {
 
-namespace {
-
 #ifdef WEB_ENABLED
-// Minimal bootstrap script. Real implementation will move into
-// project/web/ngspice_bridge.js (loaded via the export preset's head_include)
-// — this inline stub just proves the bridge is reachable for now.
-const char *kBootstrap = R"JS(
+namespace {
+void evaluate_browser_javascript(const char *javascript_source_text) {
+	godot::JavaScriptBridge::get_singleton()->eval(javascript_source_text);
+}
+} // namespace
+#endif
+
+WebWorkerSpiceSimulator::WebWorkerSpiceSimulator() {
+#ifdef WEB_ENABLED
+	evaluate_browser_javascript(R"JS(
 if (!globalThis.spice3d) {
 	globalThis.spice3d = {
 		ready: false,
-		pending_external: {},
-		samples: [],
-		init_info: null,
-		running: false,
-		load_netlist: function(lines) { /* TODO: spawn worker */ return false; },
-		start_transient: function(step, stop) { /* TODO */ return false; },
-		stop: function() { /* TODO */ },
-		set_external: function(name, v) { this.pending_external[name.toLowerCase()] = v; },
-		drain_samples: function() { const s = this.samples; this.samples = []; return s; },
+		pendingExternalVoltagesByLowercaseName: {},
+		bufferedSimulationSamples: [],
+		nodeNames: null,
+		isSimulationRunning: false,
+		loadNetlistLines: function(netlistLines) { return false; },
+		startTransientAnalysis: function(stepSeconds, stopSeconds) { return false; },
+		stopSimulation: function() {},
+		setExternalVoltageSource: function(sourceName, volts) {
+			this.pendingExternalVoltagesByLowercaseName[sourceName.toLowerCase()] = volts;
+		},
+		takeBufferedSimulationSamples: function() {
+			const drained = this.bufferedSimulationSamples;
+			this.bufferedSimulationSamples = [];
+			return drained;
+		},
 	};
 }
-)JS";
-#endif
-
-} // namespace
-
-SpiceSimulatorWeb::SpiceSimulatorWeb() {
-#ifdef WEB_ENABLED
-	godot::JavaScriptBridge::get_singleton()->eval(kBootstrap);
+)JS");
 #endif
 }
 
-SpiceSimulatorWeb::~SpiceSimulatorWeb() {
-	stop();
+WebWorkerSpiceSimulator::~WebWorkerSpiceSimulator() {
+	stop_simulation();
 }
 
-bool SpiceSimulatorWeb::load_netlist(const std::vector<std::string> & /*lines*/) {
-	// TODO: marshal `lines` into a JS array via JavaScriptBridge and call
-	// globalThis.spice3d.load_netlist(...). Will require the worker to be
-	// spawned (handled JS-side) and the ngspice WASM to be fetched.
+bool WebWorkerSpiceSimulator::load_netlist_lines(const std::vector<std::string> &netlist_lines) {
+	(void)netlist_lines;
 	return false;
 }
 
-bool SpiceSimulatorWeb::start_transient(double /*step_s*/, double /*stop_s*/) {
+bool WebWorkerSpiceSimulator::start_transient_analysis(double timestep_seconds, double stop_time_seconds) {
+	(void)timestep_seconds;
+	(void)stop_time_seconds;
 	return false;
 }
 
-void SpiceSimulatorWeb::stop() {
+void WebWorkerSpiceSimulator::stop_simulation() {
 #ifdef WEB_ENABLED
-	godot::JavaScriptBridge::get_singleton()->eval("if (globalThis.spice3d) globalThis.spice3d.stop();");
+	evaluate_browser_javascript("if (globalThis.spice3d) globalThis.spice3d.stopSimulation();");
 #endif
-	running_ = false;
+	background_worker_is_running = false;
 }
 
-bool SpiceSimulatorWeb::is_running() const { return running_; }
-
-void SpiceSimulatorWeb::set_external_voltage(const std::string & /*source_name*/, double /*volts*/) {
-	// TODO: forward to globalThis.spice3d.set_external(name, volts) once the
-	// JS bridge can accept a (string, number) call from C++.
+bool WebWorkerSpiceSimulator::is_simulation_running() const {
+	return background_worker_is_running;
 }
 
-std::vector<Sample> SpiceSimulatorWeb::drain_samples() {
-	// Bridge wiring will pull samples from the JS-side ring buffer and push
-	// into queue_ from a Godot-thread callback (likely _process). For now the
-	// queue stays empty.
-	return queue_.drain();
+void WebWorkerSpiceSimulator::set_external_voltage_source(const std::string &source_name, double volts) {
+	(void)source_name;
+	(void)volts;
 }
 
-const SimInitInfo *SpiceSimulatorWeb::init_info() const {
-	return init_info_ready_ ? &init_info_ : nullptr;
+std::vector<SimulationSample> WebWorkerSpiceSimulator::take_buffered_samples() {
+	return sample_queue.take_all_samples();
+}
+
+const SimulationNodeNames *WebWorkerSpiceSimulator::get_node_names_when_ready() const {
+	return node_names_are_ready ? &simulation_node_names : nullptr;
 }
 
 } // namespace web

@@ -8,11 +8,11 @@
 
 namespace spice3d {
 
-std::unique_ptr<SpiceSimulator> SpiceSimulator::create() {
+std::unique_ptr<SpiceSimulator> SpiceSimulator::create_for_current_platform() {
 #ifdef WEB_ENABLED
-	return std::make_unique<web::SpiceSimulatorWeb>();
+	return std::make_unique<web::WebWorkerSpiceSimulator>();
 #else
-	return std::make_unique<native::SpiceSimulatorNative>();
+	return std::make_unique<native::LibngspiceSpiceSimulator>();
 #endif
 }
 

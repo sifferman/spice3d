@@ -1,13 +1,5 @@
 #pragma once
 
-// SampleQueue — a small, thread-safe FIFO of Samples used to buffer between
-// the ngspice background thread (or Web Worker) and Godot's main thread.
-//
-// This is the v0 implementation: a std::mutex around a std::vector. Good
-// enough to get correctness end-to-end before measuring. A
-// SharedArrayBuffer-backed SPSC ring buffer can replace it later behind the
-// same interface; the rest of the codebase only sees push() / drain().
-
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -16,33 +8,33 @@
 
 namespace spice3d {
 
-class SampleQueue {
+class SimulationSampleQueue {
 public:
-	void push(Sample sample) {
-		std::lock_guard<std::mutex> lock(mutex_);
-		samples_.push_back(std::move(sample));
+	void push_sample(SimulationSample new_sample) {
+		const std::lock_guard<std::mutex> lock(samples_mutex);
+		buffered_samples.push_back(std::move(new_sample));
 	}
 
-	std::vector<Sample> drain() {
-		std::lock_guard<std::mutex> lock(mutex_);
-		std::vector<Sample> out;
-		out.swap(samples_);
-		return out;
+	std::vector<SimulationSample> take_all_samples() {
+		const std::lock_guard<std::mutex> lock(samples_mutex);
+		std::vector<SimulationSample> drained_samples;
+		drained_samples.swap(buffered_samples);
+		return drained_samples;
 	}
 
-	void clear() {
-		std::lock_guard<std::mutex> lock(mutex_);
-		samples_.clear();
+	void clear_all_samples() {
+		const std::lock_guard<std::mutex> lock(samples_mutex);
+		buffered_samples.clear();
 	}
 
-	std::size_t size_approx() const {
-		std::lock_guard<std::mutex> lock(mutex_);
-		return samples_.size();
+	std::size_t approximate_buffered_count() const {
+		const std::lock_guard<std::mutex> lock(samples_mutex);
+		return buffered_samples.size();
 	}
 
 private:
-	mutable std::mutex mutex_;
-	std::vector<Sample> samples_;
+	mutable std::mutex samples_mutex;
+	std::vector<SimulationSample> buffered_samples;
 };
 
 } // namespace spice3d

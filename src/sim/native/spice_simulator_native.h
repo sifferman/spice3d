@@ -1,13 +1,5 @@
 #pragma once
 
-// Native libngspice implementation of SpiceSimulator.
-//
-// Build: only compiled when SPICE3D_HAVE_LIBNGSPICE is defined (set by the
-// build system when `sharedspice.h` and `libngspice` are available). Without
-// libngspice we fall back to a stub that always reports "no backend".
-
-#include "../spice_simulator.h"
-
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -15,44 +7,50 @@
 #include <unordered_map>
 
 #include "../sample_queue.h"
+#include "../spice_simulator.h"
 
 namespace spice3d {
 namespace native {
 
-class SpiceSimulatorNative : public SpiceSimulator {
+class LibngspiceSpiceSimulator : public SpiceSimulator {
 public:
-	SpiceSimulatorNative();
-	~SpiceSimulatorNative() override;
+	LibngspiceSpiceSimulator();
+	~LibngspiceSpiceSimulator() override;
 
-	bool load_netlist(const std::vector<std::string> &lines) override;
-	bool start_transient(double step_s, double stop_s) override;
-	void stop() override;
-	bool is_running() const override;
-	void set_external_voltage(const std::string &source_name, double volts) override;
-	std::vector<Sample> drain_samples() override;
-	const SimInitInfo *init_info() const override;
+	bool load_netlist_lines(const std::vector<std::string> &netlist_lines) override;
+	bool start_transient_analysis(double timestep_seconds, double stop_time_seconds) override;
+	void stop_simulation() override;
+	bool is_simulation_running() const override;
+	void set_external_voltage_source(const std::string &source_name, double volts) override;
+	std::vector<SimulationSample> take_buffered_samples() override;
+	const SimulationNodeNames *get_node_names_when_ready() const override;
 
-	// libngspice C callbacks — public so the trampolines in the .cpp can
-	// dispatch into the instance via the userData pointer ngSpice_Init takes.
-	void on_send_char(const char *msg);
-	void on_send_stat(const char *msg);
-	void on_send_data_vec(double time, const char *const *names, const double *values, int count);
-	void on_send_init_info(const char *const *vector_names, int count);
-	void on_bg_thread_running(bool running);
-	void on_controlled_exit(int status);
-	void on_get_vsrc_data(double *out_value, double time, const char *node_name);
+	void receive_log_message(const char *message_text);
+	void receive_status_message(const char *message_text);
+	void receive_simulation_sample(
+			double simulation_time_seconds,
+			const char *const *vector_names,
+			const double *vector_values,
+			int vector_count);
+	void receive_node_names(const char *const *vector_names, int vector_count);
+	void receive_background_thread_running_state(bool is_now_running);
+	void receive_controlled_exit_status(int exit_status);
+	void provide_external_voltage_value(
+			double *value_to_write,
+			double simulation_time_seconds,
+			const char *source_node_name);
 
 private:
-	SampleQueue queue_;
-	SimInitInfo init_info_;
-	std::atomic<bool> init_info_ready_{false};
-	std::atomic<bool> running_{false};
-	std::atomic<bool> stop_requested_{false};
+	SimulationSampleQueue sample_queue;
+	SimulationNodeNames simulation_node_names;
+	std::atomic<bool> node_names_are_ready{false};
+	std::atomic<bool> background_thread_is_running{false};
+	std::atomic<bool> stop_has_been_requested{false};
 
-	mutable std::mutex sources_mutex_;
-	std::unordered_map<std::string, double> external_sources_;
+	mutable std::mutex external_sources_mutex;
+	std::unordered_map<std::string, double> external_voltage_sources_by_name;
 
-	bool ngspice_initialized_ = false;
+	bool ngspice_has_been_initialized = false;
 };
 
 } // namespace native

@@ -13,117 +13,153 @@ namespace spice3d {
 
 namespace {
 
-std::string maybe_dup(const char *s) {
-	return s ? std::string(s) : std::string();
+std::string copy_c_string_or_empty(const char *possibly_null_c_string) {
+	return possibly_null_c_string ? std::string(possibly_null_c_string) : std::string();
 }
 
-// Read `lab=` from an N-record property block via xschem2spice's parser.
-std::string wire_label(const char *prop_block) {
-	if (!prop_block) return {};
-	char *val = xs_prop_get(prop_block, "lab");
-	if (!val) return {};
-	std::string out(val);
-	std::free(val);
-	return out;
+std::string read_property_value_or_empty(const char *property_block, const char *property_key) {
+	if (!property_block) return {};
+	char *allocated_value = xs_prop_get(property_block, property_key);
+	if (!allocated_value) return {};
+	std::string value_copy(allocated_value);
+	std::free(allocated_value);
+	return value_copy;
 }
 
-std::string instance_name(const char *prop_block) {
-	if (!prop_block) return {};
-	char *val = xs_prop_get(prop_block, "name");
-	if (!val) return {};
-	std::string out(val);
-	std::free(val);
-	return out;
+ComponentPin make_pin_in_global_coordinates(
+		const xs_instance &instance,
+		const xs_symbol_pin &symbol_local_pin) {
+	double rotated_local_x = 0.0;
+	double rotated_local_y = 0.0;
+	xs_transform_pin_to_global(
+			instance.rotation,
+			instance.flip,
+			symbol_local_pin.x,
+			symbol_local_pin.y,
+			&rotated_local_x,
+			&rotated_local_y);
+
+	ComponentPin pin;
+	pin.pin_name = copy_c_string_or_empty(symbol_local_pin.name);
+	pin.pin_direction = copy_c_string_or_empty(symbol_local_pin.dir);
+	pin.global_x = instance.x + rotated_local_x;
+	pin.global_y = instance.y + rotated_local_y;
+	return pin;
 }
 
-void copy_pins_to_global(const xs_instance &inst, ComponentInstance &out) {
-	if (!inst.resolved_symbol) {
-		out.symbol_resolved = false;
+void populate_symbol_dependent_fields(const xs_instance &instance, ComponentInstance &component) {
+	if (!instance.resolved_symbol) {
+		component.symbol_was_resolved = false;
 		return;
 	}
-	out.symbol_resolved = true;
-	out.symbol_type = maybe_dup(inst.resolved_symbol->type);
-	out.symbol_path = maybe_dup(inst.resolved_symbol->path);
-
-	const xs_symbol &sym = *inst.resolved_symbol;
-	out.pins.reserve(sym.pin_count);
-	for (int i = 0; i < sym.pin_count; ++i) {
-		const xs_symbol_pin &p = sym.pins[i];
-		double gx = 0.0, gy = 0.0;
-		xs_transform_pin_to_global(inst.rotation, inst.flip, p.x, p.y, &gx, &gy);
-		Pin pin;
-		pin.name = maybe_dup(p.name);
-		pin.dir = maybe_dup(p.dir);
-		pin.x = inst.x + gx;
-		pin.y = inst.y + gy;
-		out.pins.push_back(std::move(pin));
+	const xs_symbol &resolved_symbol = *instance.resolved_symbol;
+	component.symbol_was_resolved = true;
+	component.symbol_type = copy_c_string_or_empty(resolved_symbol.type);
+	component.resolved_symbol_path = copy_c_string_or_empty(resolved_symbol.path);
+	component.pins_in_global_coordinates.reserve(resolved_symbol.pin_count);
+	for (int pin_index = 0; pin_index < resolved_symbol.pin_count; ++pin_index) {
+		component.pins_in_global_coordinates.push_back(
+				make_pin_in_global_coordinates(instance, resolved_symbol.pins[pin_index]));
 	}
 }
 
-} // anonymous namespace
+WireSegment make_wire_segment(const xs_wire &xschem_wire) {
+	WireSegment wire;
+	wire.start_x = xschem_wire.x1;
+	wire.start_y = xschem_wire.y1;
+	wire.end_x = xschem_wire.x2;
+	wire.end_y = xschem_wire.y2;
+	wire.net_label = read_property_value_or_empty(xschem_wire.prop_block, "lab");
+	return wire;
+}
 
-SchematicLoadResult load_schematic(
-		const std::string &sch_path,
-		const std::string &xschemrc_path,
-		const std::vector<std::string> &extra_search_paths) {
-	SchematicLoadResult result;
+ComponentInstance make_component_instance(const xs_instance &xschem_instance) {
+	ComponentInstance component;
+	component.instance_name = read_property_value_or_empty(xschem_instance.prop_block, "name");
+	component.symbol_reference = copy_c_string_or_empty(xschem_instance.symref);
+	component.placement_x = xschem_instance.x;
+	component.placement_y = xschem_instance.y;
+	component.rotation_quarter_turns = xschem_instance.rotation;
+	component.flip_flag = xschem_instance.flip;
+	populate_symbol_dependent_fields(xschem_instance, component);
+	return component;
+}
 
-	xs_library_path lib;
-	xs_library_path_init(&lib);
-	if (!xschemrc_path.empty()) {
-		xs_library_path_load_xschemrc(&lib, xschemrc_path.c_str());
+void load_xschemrc_into_library_path_if_provided(
+		const std::string &xschemrc_file_path,
+		xs_library_path *library_path) {
+	if (xschemrc_file_path.empty()) return;
+	xs_library_path_load_xschemrc(library_path, xschemrc_file_path.c_str());
+}
+
+void append_search_paths_to_library_path(
+		const std::vector<std::string> &extra_symbol_search_paths,
+		xs_library_path *library_path) {
+	for (const auto &one_search_path : extra_symbol_search_paths) {
+		xs_library_path_add(library_path, one_search_path.c_str());
 	}
-	for (const auto &p : extra_search_paths) {
-		xs_library_path_add(&lib, p.c_str());
+}
+
+std::vector<WireSegment> wires_from_parsed_xschem(const xs_schematic &parsed_schematic) {
+	std::vector<WireSegment> wires;
+	wires.reserve(parsed_schematic.wire_count);
+	for (int wire_index = 0; wire_index < parsed_schematic.wire_count; ++wire_index) {
+		wires.push_back(make_wire_segment(parsed_schematic.wires[wire_index]));
+	}
+	return wires;
+}
+
+std::vector<ComponentInstance> components_from_parsed_xschem(const xs_schematic &parsed_schematic) {
+	std::vector<ComponentInstance> components;
+	components.reserve(parsed_schematic.instance_count);
+	for (int instance_index = 0; instance_index < parsed_schematic.instance_count; ++instance_index) {
+		components.push_back(make_component_instance(parsed_schematic.instances[instance_index]));
+	}
+	return components;
+}
+
+Schematic schematic_from_parsed_xschem(const xs_schematic &parsed_schematic) {
+	Schematic schematic;
+	schematic.source_file_path = copy_c_string_or_empty(parsed_schematic.path);
+	schematic.cell_name = copy_c_string_or_empty(parsed_schematic.cell_name);
+	schematic.wires = wires_from_parsed_xschem(parsed_schematic);
+	schematic.component_instances = components_from_parsed_xschem(parsed_schematic);
+	return schematic;
+}
+
+} // namespace
+
+SchematicLoadResult load_schematic_from_file(
+		const std::string &schematic_file_path,
+		const std::string &xschemrc_file_path,
+		const std::vector<std::string> &extra_symbol_search_paths) {
+	SchematicLoadResult load_result;
+
+	xs_library_path symbol_library_path;
+	xs_library_path_init(&symbol_library_path);
+	load_xschemrc_into_library_path_if_provided(xschemrc_file_path, &symbol_library_path);
+	append_search_paths_to_library_path(extra_symbol_search_paths, &symbol_library_path);
+
+	xs_schematic parsed_schematic;
+	std::memset(&parsed_schematic, 0, sizeof(parsed_schematic));
+	if (xs_parse_schematic(schematic_file_path.c_str(), &parsed_schematic) != 0) {
+		xs_library_path_free(&symbol_library_path);
+		load_result.error_message = "failed to parse schematic: " + schematic_file_path;
+		return load_result;
 	}
 
-	xs_schematic sch;
-	std::memset(&sch, 0, sizeof(sch));
-	if (xs_parse_schematic(sch_path.c_str(), &sch) != 0) {
-		xs_library_path_free(&lib);
-		result.error = "failed to parse schematic: " + sch_path;
-		return result;
-	}
+	constexpr int lvs_mode_disabled = 0;
+	xs_netlister netlister;
+	xs_netlister_init(&netlister, &symbol_library_path, lvs_mode_disabled);
+	xs_netlister_resolve_symbols(&netlister, &parsed_schematic);
 
-	xs_netlister nl;
-	xs_netlister_init(&nl, &lib, /*lvs_mode=*/0);
-	if (xs_netlister_resolve_symbols(&nl, &sch) != 0) {
-		// Continue anyway — unresolved symbols become components with
-		// symbol_resolved=false. This matches xschem's own "* IS MISSING"
-		// pattern; the renderer can draw a placeholder.
-	}
+	load_result.loaded_schematic = schematic_from_parsed_xschem(parsed_schematic);
+	load_result.was_successful = true;
 
-	result.schematic.path = maybe_dup(sch.path);
-	result.schematic.cell_name = maybe_dup(sch.cell_name);
-
-	result.schematic.wires.reserve(sch.wire_count);
-	for (int i = 0; i < sch.wire_count; ++i) {
-		const xs_wire &w = sch.wires[i];
-		WireSegment seg;
-		seg.x1 = w.x1; seg.y1 = w.y1; seg.x2 = w.x2; seg.y2 = w.y2;
-		seg.label = wire_label(w.prop_block);
-		result.schematic.wires.push_back(std::move(seg));
-	}
-
-	result.schematic.components.reserve(sch.instance_count);
-	for (int i = 0; i < sch.instance_count; ++i) {
-		const xs_instance &inst = sch.instances[i];
-		ComponentInstance c;
-		c.name = instance_name(inst.prop_block);
-		c.symref = maybe_dup(inst.symref);
-		c.x = inst.x;
-		c.y = inst.y;
-		c.rotation = inst.rotation;
-		c.flip = inst.flip;
-		copy_pins_to_global(inst, c);
-		result.schematic.components.push_back(std::move(c));
-	}
-
-	result.ok = true;
-	xs_netlister_free(&nl);
-	xs_free_schematic(&sch);
-	xs_library_path_free(&lib);
-	return result;
+	xs_netlister_free(&netlister);
+	xs_free_schematic(&parsed_schematic);
+	xs_library_path_free(&symbol_library_path);
+	return load_result;
 }
 
 } // namespace spice3d

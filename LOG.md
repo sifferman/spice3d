@@ -5,6 +5,69 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — Coding-standards sweep across all session-added code
+
+User set a project-wide style: self-documenting names, no comments,
+verbose/non-vague identifiers, no jargon, const + pure preferred, lots of
+small helpers, reuse over reimplementation. Saved as a feedback memory.
+
+Renames touched the entire public C++ surface added this session. Key
+changes:
+
+| Was | Is |
+|---|---|
+| `Sample` | `SimulationSample` |
+| `SimInitInfo` | `SimulationNodeNames` |
+| `SampleQueue::push/drain/clear/size_approx` | `push_sample/take_all_samples/clear_all_samples/approximate_buffered_count` |
+| `SpiceSimulator::create()` | `create_for_current_platform()` |
+| `load_netlist/start_transient/stop/is_running/set_external_voltage/drain_samples/init_info` | `load_netlist_lines/start_transient_analysis/stop_simulation/is_simulation_running/set_external_voltage_source/take_buffered_samples/get_node_names_when_ready` |
+| `SpiceSimulatorNative` | `LibngspiceSpiceSimulator` |
+| `SpiceSimulatorWeb` | `WebWorkerSpiceSimulator` |
+| `trampoline_send_char` (jargon) | `ngspice_send_char_callback` |
+| `on_send_data_vec/on_send_init_info/on_get_vsrc_data` | `receive_simulation_sample/receive_node_names/provide_external_voltage_value` |
+| `Schematic::wires/components` fields | unchanged on the struct but field names within scope are descriptive |
+| `Pin { name, dir, x, y }` | `ComponentPin { pin_name, pin_direction, global_x, global_y }` |
+| `ComponentInstance { name, symref, ... }` | `ComponentInstance { instance_name, symbol_reference, rotation_quarter_turns, ... }` |
+| `WireSegment { x1, y1, x2, y2, label }` | `WireSegment { start_x, start_y, end_x, end_y, net_label }` |
+| `SchematicLoadResult { ok, error, schematic }` | `{ was_successful, error_message, loaded_schematic }` |
+| `load_schematic()` | `load_schematic_from_file()` |
+| `Spice3DNode::version/is_web_backend/simulator_backend/load_schematic` | `get_spice3d_version/is_running_on_web_platform/describe_simulator_backend/load_schematic_into_dictionary` |
+| `SPICE3D_VERSION` macro | `SPICE3D_VERSION_STRING` |
+
+GDScript main.gd, both project/web/*.js files, and the smoke test were
+updated to match the new API.
+
+### Things I dropped because the name didn't survive the test
+- `lazily_constructed_simulator` → just `simulator`. "Lazily constructed"
+  is an implementation note, not the identifier's meaning.
+- `kBrowserSideBridgeBootstrapScript` (jargon: "bridge", "bootstrap") →
+  inlined into the one call site as a raw string literal. The named
+  constant existed only to justify multi-line string formatting.
+- `build_library_path_from_inputs` (vague) → split into
+  `load_xschemrc_into_library_path_if_provided` and
+  `append_search_paths_to_library_path`.
+- `copy_parsed_schematic_into_result` (vague "result") → split into
+  `wires_from_parsed_xschem`, `components_from_parsed_xschem`, and
+  `schematic_from_parsed_xschem` (each returns what its name says).
+
+### Comments
+Stripped all explanatory and orientation comments. Closing-namespace
+`} // namespace foo` markers stayed (Godot/godot-cpp convention; helpful
+across nested namespaces). Inline `/*param_name*/` annotations for unused
+function params replaced with either C-style nameless params (cleanest in
+.cpp) or `(void)name;` casts inside the function body (when the header
+binds a name).
+
+### Verification
+`make -C test run` still passes:
+- `button_test: OK (cell=button_test, 3 components, 0 wires)`
+- `3bit_counter: OK (cell=3bit_counter, 14 components, 24 wires, 24 labelled)`
+
+`third_party/xschem2spice` left untouched — that submodule has its own
+conventions and is upstream's to govern.
+
+---
+
 ## 2026-05-23 — Web export green: threads=no + host linux GDExtension
 
 ### Failure mode (from API-fetched run 26320550032)

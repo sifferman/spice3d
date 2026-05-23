@@ -1,10 +1,5 @@
 #pragma once
 
-// Spice3DNode is the entry-point GDExtension node for the spice3d simulator.
-// For now it is intentionally minimal: it exists so the Godot project can
-// instantiate *something* from the GDExtension while the rest of the
-// architecture (xschem parsing, ngspice bridge, scene generation) is wired up.
-
 #include <memory>
 
 #include "godot_cpp/classes/node.hpp"
@@ -26,25 +21,15 @@ public:
 	Spice3DNode();
 	~Spice3DNode() override;
 
-	godot::String version() const;
-	bool is_web_backend() const;
-
-	// Construct (lazily) and return the simulator's backend tag — useful in
-	// GDScript for sanity-checking that the factory picked the expected
-	// implementation per platform.
-	godot::String simulator_backend();
-
-	// Parse a .sch file (via the bundled xschem2spice). Returns a Dictionary:
-	//   { "ok": bool, "error": String,
-	//     "cell_name": String, "path": String,
-	//     "wires": Array[Dictionary{x1,y1,x2,y2,label}],
-	//     "components": Array[Dictionary{name,symref,type,x,y,rotation,flip,resolved,pins}] }
-	// `xschemrc_path` may be "" to skip xschemrc loading; in that case the
-	// loader still searches the .sch's own directory for symbol refs.
-	godot::Dictionary load_schematic(const godot::String &sch_path, const godot::String &xschemrc_path);
+	godot::String get_spice3d_version() const;
+	bool is_running_on_web_platform() const;
+	godot::String describe_simulator_backend();
+	godot::Dictionary load_schematic_into_dictionary(
+			const godot::String &schematic_file_path,
+			const godot::String &xschemrc_file_path);
 
 private:
-	std::unique_ptr<SpiceSimulator> simulator_;
+	std::unique_ptr<SpiceSimulator> simulator;
 };
 
 } // namespace spice3d
