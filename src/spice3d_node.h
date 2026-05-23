@@ -9,6 +9,7 @@
 
 #include "godot_cpp/classes/node.hpp"
 #include "godot_cpp/classes/wrapped.hpp"
+#include "godot_cpp/variant/dictionary.hpp"
 #include "godot_cpp/variant/string.hpp"
 
 namespace spice3d {
@@ -32,6 +33,15 @@ public:
 	// GDScript for sanity-checking that the factory picked the expected
 	// implementation per platform.
 	godot::String simulator_backend();
+
+	// Parse a .sch file (via the bundled xschem2spice). Returns a Dictionary:
+	//   { "ok": bool, "error": String,
+	//     "cell_name": String, "path": String,
+	//     "wires": Array[Dictionary{x1,y1,x2,y2,label}],
+	//     "components": Array[Dictionary{name,symref,type,x,y,rotation,flip,resolved,pins}] }
+	// `xschemrc_path` may be "" to skip xschemrc loading; in that case the
+	// loader still searches the .sch's own directory for symbol refs.
+	godot::Dictionary load_schematic(const godot::String &sch_path, const godot::String &xschemrc_path);
 
 private:
 	std::unique_ptr<SpiceSimulator> simulator_;

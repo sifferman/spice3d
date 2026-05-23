@@ -37,12 +37,23 @@ Run the following command to download godot-cpp:
 
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
-env.Append(CPPPATH=["src/"])
+env.Append(CPPPATH=["src/", "third_party/xschem2spice/src/"])
+
+# xschem2spice ships a tiny CLI driver in xschem2spice.c that has its own
+# main() — exclude it. We link the library sources directly into the
+# GDExtension instead of building a separate static library.
+xschem2spice_sources = [
+    f for f in Glob("third_party/xschem2spice/src/*.c")
+    if str(f).split("/")[-1] != "xschem2spice.c"
+]
+
 sources = (
     Glob("src/*.cpp")
     + Glob("src/sim/*.cpp")
     + Glob("src/sim/native/*.cpp")
     + Glob("src/sim/web/*.cpp")
+    + Glob("src/scene/*.cpp")
+    + xschem2spice_sources
 )
 
 if env["target"] in ["editor", "template_debug"]:

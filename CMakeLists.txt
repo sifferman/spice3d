@@ -43,7 +43,7 @@ project(spice3d
     VERSION 0.1.0
     DESCRIPTION "Real-time interactive SPICE circuit simulator in 3D (Godot + libngspice)."
     HOMEPAGE_URL "https://github.com/sifferman/spice3d"
-    LANGUAGES CXX
+    LANGUAGES CXX C
 )
 
 add_library(${LIBNAME} SHARED)
@@ -63,9 +63,29 @@ target_sources(${LIBNAME}
     src/sim/native/spice_simulator_native.cpp
     src/sim/web/spice_simulator_web.h
     src/sim/web/spice_simulator_web.cpp
+
+    src/scene/schematic_loader.h
+    src/scene/schematic_loader.cpp
+
+    # xschem2spice library sources — linked directly into the GDExtension.
+    # Exclude xschem2spice.c (it has a main() for the standalone CLI).
+    third_party/xschem2spice/src/parser.c
+    third_party/xschem2spice/src/parser.h
+    third_party/xschem2spice/src/netlist.c
+    third_party/xschem2spice/src/netlist.h
+    third_party/xschem2spice/src/xschemrc.c
+    third_party/xschem2spice/src/xschemrc.h
+    third_party/xschem2spice/src/strutil.c
+    third_party/xschem2spice/src/strutil.h
+    third_party/xschem2spice/src/hash.c
+    third_party/xschem2spice/src/hash.h
 )
 
-target_include_directories(${LIBNAME} PRIVATE src)
+target_include_directories(${LIBNAME}
+    PRIVATE
+    src
+    third_party/xschem2spice/src
+)
 
 # Fetch a list of the xml files to use for documentation and add to our target
 file(GLOB_RECURSE DOC_XML LIST_DIRECTORIES NO CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/doc_classes/*.xml")

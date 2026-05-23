@@ -5,6 +5,57 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-22 — xschem parser via xschem2spice
+
+### Decision: don't reimplement, reuse
+Per the design doc and user direction, spice3d parses `.sch` / `.sym` files by
+linking [xschem2spice](https://github.com/sifferman/xschem2spice) directly
+into the GDExtension. xschem2spice already mirrors xschem 3.4.7's parsing
+pipeline (distilled in `parser.c` and `netlist.c`) and is LVS-verified
+against the real `xschem` binary in its own CI. Reimplementing the L/B/P/A/T
+walker in C++ would be a year of bugs xschem2spice has already fixed.
+
+Submodule lives at `third_party/xschem2spice/` (https URL — git@ would
+require SSH credentials on every clone).
+
+### Surface
+- `src/scene/schematic_loader.{h,cpp}` — pure C++/STL, no godot-cpp
+  dependency. Takes a `.sch` path + optional xschemrc, returns a
+  `SchematicLoadResult { ok, error, Schematic { wires, components } }`.
+  Component pins are pre-transformed into global coords via
+  `xs_transform_pin_to_global`.
+- `Spice3DNode::load_schematic(sch_path, xschemrc_path)` — Godot-callable
+  shim that returns a `Dictionary` with the same data. GDScript-friendly.
+
+### What's *missing* in xschem2spice for the renderer
+xschem2spice keeps the netlisting view — wires (N records) and instances
+(C records) — but discards the .sym drawing primitives (L/B/P/A/T tags).
+The renderer can do a v0 visualization with just wires + pin markers +
+bounding boxes, but real transistor body art will need either:
+  (a) extending xschem2spice to retain drawing primitives, or
+  (b) a parallel lightweight scanner in spice3d that only reads L/B/P/A/T
+      and discards everything else.
+(a) is cleaner since the user owns xschem2spice. Tracked as future work.
+
+### Smoke test
+`test/test_schematic_loader.cpp` links schematic_loader.cpp against
+xschem2spice's C sources (no Godot toolchain) and runs against the
+example schematics in `../spice3d_notes/examples`. Today it asserts:
+- `button_test.sch` → 3 components, 0 wires, cell=button_test.
+- `3bit_counter.sch` → 14 components, 24 wires, all wires labelled.
+
+Both pass locally. CI runs the same test on every push — `parser-test` job
+in `.github/workflows/ci.yml` checks out `sifferman/spice3d_notes` as a
+sibling for the example data, then `make -C test run`.
+
+### Build glue
+- `CMakeLists.txt`: added `LANGUAGES CXX C`, listed the 5 xschem2spice C
+  files explicitly (excluding `xschem2spice.c` which has a CLI `main()`),
+  added the include path.
+- `SConstruct`: same — Glob with an explicit exclude of `xschem2spice.c`.
+
+---
+
 ## 2026-05-22 — ngspice dual-backend scaffold
 
 ### `src/sim/` layout
