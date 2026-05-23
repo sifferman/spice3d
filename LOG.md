@@ -5,6 +5,44 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-22 — GitHub Pages deploy workflow
+
+Added `.github/workflows/pages.yml`. On every push to `main`:
+1. Build the GDExtension for web (wasm32, single, `template_release`) via the
+   existing `setup-godot-cpp` action from the godot-cpp 4.3 submodule.
+2. Install Godot 4.3-stable + matching export templates.
+3. Run `--headless --import` twice (first run dies before imports finish; the
+   second pass is reliably clean), then `--headless --export-release "Web"`
+   into `build-web/`.
+4. Fetch `coi-serviceworker.js` and inject `<script src="coi-serviceworker.js">`
+   into the first `<head>` tag of Godot's exported `index.html`. Idempotent.
+5. Upload via `actions/upload-pages-artifact@v3` → `actions/deploy-pages@v4`.
+
+### Why coi-serviceworker, even with Godot threads off
+The GDExtension wasm is built `nothreads` (Godot 4.3 GDExtension web support
+is the nothreads variant). Godot itself runs single-threaded in the main
+context. But the ngspice WASM module will live in a **separately spawned**
+Web Worker that we control, and that worker needs SharedArrayBuffer to talk
+to Godot on the hot path. GitHub Pages can't serve COOP/COEP headers, so the
+Service Worker shim is what gets us cross-origin-isolation at runtime.
+
+### Export preset choices (`project/export_presets.cfg`)
+- `variant/extensions_support=true` — required for GDExtension on web.
+- `variant/thread_support=false` — matches `nothreads.wasm` paths in the
+  `.gdextension`.
+- `progressive_web_app/ensure_cross_origin_isolation_headers=true` — Godot
+  4.3's own header-injection helper. Belt-and-suspenders with coi-serviceworker.
+
+### Open questions / not verified
+- The pages workflow has not been run end-to-end yet (no CI in this loop).
+  Most likely failure points if it breaks on first run:
+  - `~/.local/share/godot/export_templates/4.3.stable/` path (Godot's expected
+    template root may differ between minor versions).
+  - The `.tpz` unzips to a `templates/` directory we then move from — verify
+    on first CI run.
+  - The `actions/deploy-pages` step needs the repo's Pages source to be set
+    to "GitHub Actions" in repo settings; we cannot do that from CI.
+
 ## 2026-05-22 — session start
 
 ### State of the repo

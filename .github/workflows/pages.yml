@@ -1,0 +1,152 @@
+# Build the spice3d Godot web export and deploy it to GitHub Pages.
+#
+# Two jobs:
+#   build   — compile the GDExtension for wasm32 (template_release), run the
+#             Godot Web export, drop coi-serviceworker.js next to index.html
+#             so SharedArrayBuffer is available on GitHub Pages (which won't
+#             serve custom COOP/COEP headers), then upload the result as a
+#             Pages artifact.
+#   deploy  — publishes the artifact to https://<owner>.github.io/spice3d/.
+#
+# Notes
+# - Godot must match the gdextension's compatibility_minimum (4.3+).
+# - Template's CI builds the GDExtension as `nothreads.wasm` — that's what
+#   Godot 4.3 loads when the export preset's variant/thread_support=false.
+#   The ngspice Web Worker we spawn ourselves is independent and *does* use
+#   SAB; that's why we need coi-serviceworker even with Godot single-threaded.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  GODOT_VERSION: 4.3
+  GODOT_STATUS: stable
+  COI_SERVICEWORKER_VERSION: v0.1.7
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # Build the GDExtension (wasm32, single precision, template_release)
+      - name: Setup godot-cpp toolchain
+        uses: ./godot-cpp/.github/actions/setup-godot-cpp
+        with:
+          platform: web
+          em-version: 3.1.62
+
+      - name: Restore SCons cache
+        uses: ./godot-cpp/.github/actions/godot-cache-restore
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache/
+          cache-name: web_wasm32_single_template_release
+
+      - name: Build GDExtension (web, template_release)
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
+        run: |
+          scons target=template_release platform=web arch=wasm32 precision=single
+
+      - name: Save SCons cache
+        uses: ./godot-cpp/.github/actions/godot-cache-save
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache/
+          cache-name: web_wasm32_single_template_release
+
+      # Install Godot headless + matching export templates
+      - name: Install Godot ${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+        run: |
+          set -euo pipefail
+          ver=${GODOT_VERSION}-${GODOT_STATUS}
+          base="https://github.com/godotengine/godot/releases/download/${ver}"
+          curl -fsSL "${base}/Godot_v${ver}_linux.x86_64.zip" -o godot.zip
+          unzip -q godot.zip
+          mv "Godot_v${ver}_linux.x86_64" "$HOME/godot"
+          chmod +x "$HOME/godot"
+          echo "$HOME" >> "$GITHUB_PATH"
+          "$HOME/godot" --version
+
+          curl -fsSL "${base}/Godot_v${ver}_export_templates.tpz" -o templates.tpz
+          tpl_dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
+          mkdir -p "$tpl_dir"
+          unzip -q templates.tpz
+          mv templates/* "$tpl_dir/"
+
+      # Open the project once headless so .godot/ is generated and imports run.
+      - name: Import project
+        run: |
+          set -euo pipefail
+          cd project
+          # First run dies after import; rerun to ensure it's clean.
+          godot --headless --import || true
+          godot --headless --import
+
+      - name: Web export
+        run: |
+          set -euo pipefail
+          mkdir -p build-web
+          cd project
+          godot --headless --export-release "Web" ../build-web/index.html
+          ls -la ../build-web
+
+      # Drop coi-serviceworker.js + a tiny loader into the export so that
+      # GitHub Pages (which can't set COOP/COEP) becomes cross-origin-isolated
+      # at runtime. The Service Worker reloads the page once on first visit to
+      # take control; from there SharedArrayBuffer is available.
+      - name: Add coi-serviceworker
+        run: |
+          set -euo pipefail
+          url="https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/${COI_SERVICEWORKER_VERSION}/coi-serviceworker.js"
+          curl -fsSL "$url" -o build-web/coi-serviceworker.js
+
+          # Inject <script src="coi-serviceworker.js"> into the head of
+          # Godot's exported index.html. Idempotent.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build-web/index.html')
+          html = p.read_text()
+          tag = '<script src="coi-serviceworker.js"></script>'
+          if tag not in html:
+              # Insert as the first child of <head>.
+              html = html.replace('<head>', '<head>\n\t' + tag, 1)
+              p.write_text(html)
+              print('injected coi-serviceworker into index.html')
+          else:
+              print('coi-serviceworker already present')
+          PY
+
+      - name: Add .nojekyll
+        run: touch build-web/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build-web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
