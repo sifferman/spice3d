@@ -9,13 +9,14 @@ const SCHEMATIC_BUNDLED_FILE_NAMES := ["button_test.sch", "button.sym"]
 const TOP_SCHEMATIC_FILE_NAME := "button_test.sch"
 
 const XSCHEM_UPSTREAM_GIT_SHA := "d7f3980301eb9f12954a8542d55b188ffe851770"
-const XSCHEM_UPSTREAM_ZIP_URL := \
-		"https://github.com/StefanSchippers/xschem/archive/" + XSCHEM_UPSTREAM_GIT_SHA + ".zip"
+const XSCHEM_JSDELIVR_FILE_LISTING_URL := \
+		"https://data.jsdelivr.com/v1/packages/gh/StefanSchippers/xschem@" + XSCHEM_UPSTREAM_GIT_SHA + "?structure=flat"
+const XSCHEM_JSDELIVR_FILE_URL_TEMPLATE := \
+		"https://cdn.jsdelivr.net/gh/StefanSchippers/xschem@" + XSCHEM_UPSTREAM_GIT_SHA + "%s"
 const XSCHEM_LOCAL_CACHE_ROOT := "user://xschem_stdlib/" + XSCHEM_UPSTREAM_GIT_SHA
 const XSCHEM_LOCAL_DEVICES_DIRECTORY := XSCHEM_LOCAL_CACHE_ROOT + "/devices"
 const XSCHEM_LOCAL_CACHE_COMPLETE_MARKER := XSCHEM_LOCAL_CACHE_ROOT + "/.fetch_complete"
-const XSCHEM_LOCAL_TEMPORARY_ZIP_PATH := XSCHEM_LOCAL_CACHE_ROOT + "/source.zip"
-const XSCHEM_DEVICES_PATH_FRAGMENT_INSIDE_ARCHIVE := "/xschem_library/devices/"
+const XSCHEM_DEVICES_PATH_FRAGMENT_INSIDE_REPO := "/xschem_library/devices/"
 
 
 func _ready() -> void:
@@ -56,61 +57,117 @@ func ensure_xschem_devices_library_is_cached() -> void:
 	if FileAccess.file_exists(XSCHEM_LOCAL_CACHE_COMPLETE_MARKER):
 		print("[spice3d] xschem devices cache HIT (sha=%s)" % XSCHEM_UPSTREAM_GIT_SHA)
 		return
-	print("[spice3d] xschem devices cache MISS, fetching %s" % XSCHEM_UPSTREAM_ZIP_URL)
+	print("[spice3d] xschem devices cache MISS, listing repo via jsDelivr...")
 	DirAccess.make_dir_recursive_absolute(XSCHEM_LOCAL_DEVICES_DIRECTORY)
-	var fetch_start_milliseconds := Time.get_ticks_msec()
-	var downloaded_zip_bytes := await download_url_as_byte_array(XSCHEM_UPSTREAM_ZIP_URL)
-	if downloaded_zip_bytes.is_empty():
-		push_error("xschem upstream zip download failed")
+	var device_symbol_repo_paths := await fetch_xschem_device_symbol_paths_via_jsdelivr_listing()
+	if device_symbol_repo_paths.is_empty():
+		push_error("xschem device-symbol listing returned no paths")
 		return
-	print("[spice3d] xschem zip downloaded: %d bytes, %d ms" % [
-			downloaded_zip_bytes.size(), Time.get_ticks_msec() - fetch_start_milliseconds])
-	var extract_start_milliseconds := Time.get_ticks_msec()
-	var extracted_device_symbol_count := extract_xschem_devices_from_zip_bytes_to_local_cache(downloaded_zip_bytes)
-	if extracted_device_symbol_count <= 0:
-		push_error("no xschem device symbols extracted from downloaded zip")
+	print("[spice3d] xschem listing returned %d device symbols, fetching in parallel..."
+			% device_symbol_repo_paths.size())
+	var parallel_fetch_start_milliseconds := Time.get_ticks_msec()
+	var successfully_fetched_file_count := await fetch_all_xschem_device_symbol_files_in_parallel(device_symbol_repo_paths)
+	var parallel_fetch_duration_milliseconds := Time.get_ticks_msec() - parallel_fetch_start_milliseconds
+	print("[spice3d] xschem fetched %d/%d device symbols in %d ms" % [
+			successfully_fetched_file_count,
+			device_symbol_repo_paths.size(),
+			parallel_fetch_duration_milliseconds])
+	if successfully_fetched_file_count != device_symbol_repo_paths.size():
+		push_error("xschem device-symbol fetch was incomplete; not writing cache-complete marker")
 		return
-	print("[spice3d] xschem extracted %d device symbols in %d ms" % [
-			extracted_device_symbol_count, Time.get_ticks_msec() - extract_start_milliseconds])
 	write_cache_complete_marker_for_xschem_devices()
 
 
-func extract_xschem_devices_from_zip_bytes_to_local_cache(zip_bytes: PackedByteArray) -> int:
-	save_zip_bytes_to_temporary_path(zip_bytes)
-	var zip_reader := ZIPReader.new()
-	var zip_open_error := zip_reader.open(XSCHEM_LOCAL_TEMPORARY_ZIP_PATH)
-	if zip_open_error != OK:
-		push_error("ZIPReader.open failed: %d" % zip_open_error)
-		return 0
-	var device_symbol_entry_paths_inside_archive := filter_zip_entries_to_device_symbol_files(
-			zip_reader.get_files())
-	for one_entry_path_inside_archive in device_symbol_entry_paths_inside_archive:
-		var entry_bytes := zip_reader.read_file(one_entry_path_inside_archive)
-		var symbol_file_name := one_entry_path_inside_archive.get_file()
-		var symbol_destination_path := XSCHEM_LOCAL_DEVICES_DIRECTORY + "/" + symbol_file_name
-		var destination_file := FileAccess.open(symbol_destination_path, FileAccess.WRITE)
-		destination_file.store_buffer(entry_bytes)
+func fetch_xschem_device_symbol_paths_via_jsdelivr_listing() -> Array:
+	var listing_body := await download_url_as_byte_array(XSCHEM_JSDELIVR_FILE_LISTING_URL)
+	if listing_body.is_empty():
+		return []
+	var parsed_json = JSON.parse_string(listing_body.get_string_from_utf8())
+	if parsed_json == null or not parsed_json.has("files"):
+		push_error("jsDelivr listing JSON did not contain a 'files' array")
+		return []
+	var device_symbol_paths_inside_repo := []
+	for one_file_entry in parsed_json.files:
+		var file_path_inside_repo: String = one_file_entry.get("name", "")
+		if not file_path_inside_repo.ends_with(".sym"):
+			continue
+		if not file_path_inside_repo.contains(XSCHEM_DEVICES_PATH_FRAGMENT_INSIDE_REPO):
+			continue
+		device_symbol_paths_inside_repo.append(file_path_inside_repo)
+	return device_symbol_paths_inside_repo
+
+
+func fetch_all_xschem_device_symbol_files_in_parallel(device_symbol_repo_paths: Array) -> int:
+	var pending_request_count_remaining := [device_symbol_repo_paths.size()]
+	var success_count_so_far := [0]
+	var all_requests_finished_signal_emitter := AllParallelHttpRequestsFinishedSignalEmitter.new()
+	for one_repo_path in device_symbol_repo_paths:
+		issue_one_xschem_device_symbol_fetch(
+				one_repo_path,
+				pending_request_count_remaining,
+				success_count_so_far,
+				all_requests_finished_signal_emitter)
+	if pending_request_count_remaining[0] > 0:
+		await all_requests_finished_signal_emitter.all_finished
+	return success_count_so_far[0]
+
+
+func issue_one_xschem_device_symbol_fetch(
+		one_repo_path: String,
+		pending_request_count_remaining: Array,
+		success_count_so_far: Array,
+		all_requests_finished_signal_emitter: RefCounted) -> void:
+	var http_request := HTTPRequest.new()
+	add_child(http_request)
+	var jsdelivr_file_url := XSCHEM_JSDELIVR_FILE_URL_TEMPLATE % one_repo_path
+	http_request.request_completed.connect(func(result: int, status_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+		handle_one_xschem_device_symbol_fetch_completion(
+				one_repo_path,
+				result,
+				status_code,
+				body,
+				http_request,
+				pending_request_count_remaining,
+				success_count_so_far,
+				all_requests_finished_signal_emitter), CONNECT_ONE_SHOT)
+	var request_error := http_request.request(jsdelivr_file_url)
+	if request_error != OK:
+		push_error("HTTPRequest.request returned %d for %s" % [request_error, jsdelivr_file_url])
+		http_request.queue_free()
+		decrement_pending_request_count_and_emit_when_done(
+				pending_request_count_remaining, all_requests_finished_signal_emitter)
+
+
+func handle_one_xschem_device_symbol_fetch_completion(
+		one_repo_path: String,
+		result: int,
+		status_code: int,
+		body: PackedByteArray,
+		http_request: HTTPRequest,
+		pending_request_count_remaining: Array,
+		success_count_so_far: Array,
+		all_requests_finished_signal_emitter: RefCounted) -> void:
+	http_request.queue_free()
+	if result == HTTPRequest.RESULT_SUCCESS and status_code == 200:
+		var symbol_file_name := one_repo_path.get_file()
+		var destination_path := XSCHEM_LOCAL_DEVICES_DIRECTORY + "/" + symbol_file_name
+		var destination_file := FileAccess.open(destination_path, FileAccess.WRITE)
+		destination_file.store_buffer(body)
 		destination_file.close()
-	zip_reader.close()
-	DirAccess.remove_absolute(XSCHEM_LOCAL_TEMPORARY_ZIP_PATH)
-	return device_symbol_entry_paths_inside_archive.size()
+		success_count_so_far[0] += 1
+	else:
+		push_error("xschem device-symbol fetch failed: %s (result=%d status=%d)" % [
+				one_repo_path, result, status_code])
+	decrement_pending_request_count_and_emit_when_done(
+			pending_request_count_remaining, all_requests_finished_signal_emitter)
 
 
-func save_zip_bytes_to_temporary_path(zip_bytes: PackedByteArray) -> void:
-	var temporary_zip_file := FileAccess.open(XSCHEM_LOCAL_TEMPORARY_ZIP_PATH, FileAccess.WRITE)
-	temporary_zip_file.store_buffer(zip_bytes)
-	temporary_zip_file.close()
-
-
-func filter_zip_entries_to_device_symbol_files(all_entry_paths_inside_archive: PackedStringArray) -> PackedStringArray:
-	var filtered_entry_paths := PackedStringArray()
-	for one_entry_path in all_entry_paths_inside_archive:
-		if not one_entry_path.ends_with(".sym"):
-			continue
-		if not one_entry_path.contains(XSCHEM_DEVICES_PATH_FRAGMENT_INSIDE_ARCHIVE):
-			continue
-		filtered_entry_paths.append(one_entry_path)
-	return filtered_entry_paths
+func decrement_pending_request_count_and_emit_when_done(
+		pending_request_count_remaining: Array,
+		all_requests_finished_signal_emitter: RefCounted) -> void:
+	pending_request_count_remaining[0] -= 1
+	if pending_request_count_remaining[0] <= 0:
+		all_requests_finished_signal_emitter.all_finished.emit()
 
 
 func write_cache_complete_marker_for_xschem_devices() -> void:
@@ -170,3 +227,8 @@ func update_status_text(spice3d_root_node: Node, loaded_schematic: Dictionary) -
 		status_text += "\nload error: " + str(loaded_schematic["error_message"])
 	status_label.text = status_text
 	print(status_text)
+
+
+class AllParallelHttpRequestsFinishedSignalEmitter:
+	extends RefCounted
+	signal all_finished
