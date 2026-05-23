@@ -65,6 +65,20 @@ jobs:
           platform: web
           em-version: 3.1.62
 
+      - name: Install ngspice build prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
+
+      - name: Cache ngspice emscripten build
+        id: cache_ngspice_emscripten_build
+        uses: actions/cache@v4
+        with:
+          path: third_party/ngspice/build-emscripten
+          key: ngspice-emscripten-${{ hashFiles('third_party/ngspice/build-ngspice-for-emscripten.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+
+      - name: Build ngspice for emscripten
+        if: steps.cache_ngspice_emscripten_build.outputs.cache-hit != 'true'
+        run: third_party/ngspice/build-ngspice-for-emscripten.sh
+
       - name: Restore SCons cache (web)
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
@@ -165,6 +179,12 @@ jobs:
 
       - name: Copy ngspice bridge + worker JS into the export
         run: cp project/web/*.js build-web/
+
+      - name: Copy ngspice wasm artifacts into the export
+        run: |
+          set -euo pipefail
+          cp third_party/ngspice/build-emscripten/ngspice.js build-web/
+          cp third_party/ngspice/build-emscripten/ngspice.wasm build-web/
 
       - name: Add .nojekyll
         run: touch build-web/.nojekyll
