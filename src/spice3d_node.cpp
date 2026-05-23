@@ -121,7 +121,7 @@ constexpr double WIRE_STROKE_RADIUS_IN_WORLD_UNITS = 2.0;
 constexpr double DRAWING_OUTLINE_STROKE_RADIUS_IN_WORLD_UNITS = 1.0;
 constexpr double COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS = 60.0;
 constexpr double ARC_TESSELLATION_DEGREES_PER_CYLINDER_SEGMENT = 6.0;
-constexpr double TEXT_PIXEL_SIZE_PER_XSCHEM_VERTICAL_SIZE_FACTOR = 1.5;
+constexpr double TEXT_PIXEL_SIZE_PER_XSCHEM_VERTICAL_SIZE_FACTOR = 0.6;
 constexpr double FILLED_DRAWING_EXTRUSION_HEIGHT_IN_WORLD_UNITS = 4.0;
 
 godot::Vector3 schematic_xy_to_lying_flat_world_position(double schematic_x, double schematic_y) {
@@ -212,7 +212,7 @@ void add_capsule_segment_between_two_schematic_points(
 	if (segment_length_in_world <= 0.0) return;
 
 	const double capsule_total_height_with_extended_caps =
-			segment_length_in_world + 4.0 * capsule_stroke_radius;
+			segment_length_in_world + 2.0 * capsule_stroke_radius;
 
 	godot::MeshInstance3D *capsule_mesh_instance = memnew(godot::MeshInstance3D);
 	capsule_mesh_instance->set_mesh(build_capsule_mesh_with_radius_and_total_height(
