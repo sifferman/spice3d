@@ -5,6 +5,53 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — Web export green: threads=no + host linux GDExtension
+
+### Failure mode (from API-fetched run 26320550032)
+SCons happily built `bin/web/libspice3d.web.template_release.wasm32.wasm`
+— **no `.nothreads`** — while em++ emitted
+`-sSIDE_MODULE + pthreads is experimental`. The `.gdextension` and export
+preset both point at `.wasm32.nothreads.wasm`, so Godot's web export step
+threw `Failed to open … wasm32.nothreads.wasm`.
+
+Root cause: godot-cpp 4.3's `threads` SCons option defaults to `True`. It
+only appends `.nothreads` to the suffix when threads are explicitly off.
+Fix: pass `threads=no` to the SCons web build. (Pages.yml's export preset
+already had `variant/thread_support=false` — the two have to match.)
+
+### Second failure mode in the same run
+`godot --headless --import` runs **on the Linux runner** and tries to load
+`project/bin/linux/libspice3d.linux.template_debug.x86_64.so` so it can
+register `Spice3DNode` from the GDExtension. We never built that binary in
+the deploy job, so the symbol stayed undefined, so `main.gd` failed to
+parse `Spice3DNode.new()`, so the exported pck contained a broken script.
+Bug 1's wasm error happened to mask this — fixing only Bug 1 would still
+have shipped a broken site.
+
+Fix: build the GDExtension **twice** on the deploy runner — once for web
+(template_release/single/threads=no, the deploy payload) and once for
+linux (template_debug/x86_64, host-side only for `--import`). Separate
+SCons caches per platform.
+
+### Other hardening
+- Added a `Verify GDExtension binaries are in place` step before the
+  Godot install step: `ls -lR project/bin` + `test -f` on the two
+  expected paths. Future "missing binary" failures will now be clear and
+  early instead of buried 200 lines into Godot's export trace.
+- ci.yml's matrix now passes `threads=no` when `platform=web` so the
+  compile-sanity matrix exercises the same variant we deploy. Other
+  platforms are unaffected.
+
+### Action-log access works now
+Re-issued PAT has `repo` scope (the previous one was `public_repo`-only
+and 404'd on this private repo). With the new token, the GitHub Actions
+REST API is reachable from this shell — used it to pull the exact build
+log for run 26320550032 and confirm the wasm name mismatch before
+writing the fix. Token is in conversation memory only; never written
+to disk or memory files.
+
+---
+
 ## 2026-05-22 — Windows build fix (upstream) + pages on claude
 
 ### Windows MSVC failed on `libgen.h`
