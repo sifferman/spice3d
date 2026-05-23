@@ -5,6 +5,86 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — ngspice running in the browser (RC transient verified)
+
+End-to-end: a real ngspice simulation runs in a Web Worker on the
+deployed site and prints 68 rows of TRAN output to the page console.
+
+### Build pipeline (scripts/build-ngspice-for-emscripten.sh)
+
+- ngspice added as a submodule at `third_party/ngspice`, pinned to
+  the `ngspice-46` tag.
+- Build runs in CI after `mymindstorm/setup-emsdk@v14` activates
+  emsdk, output cached by configure.ac hash.
+- Configure flags borrowed from `danchitnis/ngspice-wasm` (the
+  upstream emcc port reference):
+  `--disable-debug --disable-openmp --disable-xspice
+   --with-readline=no  CFLAGS="-std=gnu89 -O2"
+   CPPFLAGS="-Devent_auto_incr=0"`
+- One configure.ac patch applied at build time:
+  `AC_CHECK_FUNCS([times getrusage])` →
+  `AC_CHECK_FUNCS([times])` (getrusage falsely passes under
+  emscripten's autoconf test, then fails at link).
+- `--with-ngshared` (sharedspice in-process API) was dropped after
+  libtool's link step fataled with "func_fatal_configuration … can't
+  build a shared library" — wasm32-unknown-emscripten has no host
+  pattern in the version of libtool ngspice ships. We build the CLI
+  binary and drive it from the worker via FS + callMain instead;
+  the interactive sharedspice path can replace this later.
+- Final link adds `LDFLAGS=-sEXPORTED_RUNTIME_METHODS=['FS',
+  'callMain'] -sINVOKE_RUN=0 -sALLOW_MEMORY_GROWTH=1
+  -sNO_EXIT_RUNTIME=1` so the worker can write the netlist file
+  and call `main()` multiple times without the runtime tearing
+  itself down.
+- Outputs `ngspice.js` (78 KB JS shim) + `ngspice.wasm` (4.7 MB).
+  Both copied into the Pages export alongside `index.html`.
+
+### Worker / bridge wiring (project/web/)
+
+- `pages.yml` injects `<script src="ngspice_bridge.js"></script>`
+  into the exported `index.html` (same pattern as the existing
+  coi-serviceworker injection) — without it the bridge file sits
+  on the server unloaded.
+- `ngspice_bridge.js` self-installs `globalThis.spice3d` on script
+  load and auto-spawns the worker.
+- `ngspice_worker.js` sets `self.Module` (with `noInitialRun`,
+  `noExitRuntime`, captured `print`/`printErr`, `locateFile`)
+  *before* `importScripts('ngspice.js')`, then in
+  `onRuntimeInitialized`:
+  1. Writes `/proc/meminfo` to MEMFS — ngspice reads it in
+     `ft_setMaxData()`/`cp_init()` to size output buffers, and
+     without it the run aborts with "Setting the output memory is
+     not possible."  A fake one with reasonable values keeps
+     ngspice happy.
+  2. Writes the smoke-test RC transient netlist to
+     `/spice3d_smoke_test.cir`.
+  3. `Module.callMain(['-b', '/spice3d_smoke_test.cir'])`.
+  4. Posts captured stdout/stderr back to the bridge, which
+     `console.log`s them.
+
+### Verified correct, not just compiling
+
+Node test (mirroring the worker exactly) produced 68 transient
+samples for `V1 in 0 PULSE(0 1 0 0 0 1u 2u) / R1 in out 1k /
+C1 out 0 1n`:
+- v(in) tracks the 1V/1µs PULSE faithfully.
+- v(out) shows the RC charge ramp with τ=RC=1µs — ~63% by t=1µs in,
+  ~65% peak before the pulse falls, then exponential decay.
+
+Same output now appears in the deployed page's console.
+
+### Module.onRuntimeInitialized: a Node-vs-browser gotcha
+
+When testing in Node with `require('./ngspice.js')`, my pre-set
+`global.Module` was not picked up — CJS gives the require'd module
+its own `var Module` binding so the script's `typeof Module !=
+'undefined'` check sees nothing. The returned `module.exports` IS
+the real Module though, so callbacks attached to it after require
+do fire. The browser worker doesn't have this problem because
+`importScripts` runs in the worker's global scope.
+
+---
+
 ## 2026-05-23 — Extruded fills, billboard text, interconnecting line caps
 
 User feedback pass:
