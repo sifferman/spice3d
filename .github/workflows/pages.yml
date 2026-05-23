@@ -1,28 +1,7 @@
-# Build the spice3d Godot web export and deploy it to GitHub Pages.
-#
-# Two jobs:
-#   build   — compile the GDExtension for wasm32 (template_release), run the
-#             Godot Web export, drop coi-serviceworker.js next to index.html
-#             so SharedArrayBuffer is available on GitHub Pages (which won't
-#             serve custom COOP/COEP headers), then upload the result as a
-#             Pages artifact.
-#   deploy  — publishes the artifact to https://<owner>.github.io/spice3d/.
-#
-# Notes
-# - Godot must match the gdextension's compatibility_minimum (4.3+).
-# - Template's CI builds the GDExtension as `nothreads.wasm` — that's what
-#   Godot 4.3 loads when the export preset's variant/thread_support=false.
-#   The ngspice Web Worker we spawn ourselves is independent and *does* use
-#   SAB; that's why we need coi-serviceworker even with Godot single-threaded.
-
 name: Deploy to GitHub Pages
 
 on:
   push:
-    # `claude` deploys to the same Pages site as `main` so AI-driven work
-    # can be previewed live before merging. GitHub Pages only serves one
-    # site per repo — whichever branch ran most recently wins, which is the
-    # behavior we want for a staging flow.
     branches: [main, claude]
   workflow_dispatch:
 
@@ -49,21 +28,18 @@ jobs:
         with:
           submodules: true
 
-      # Build the GDExtension TWICE on this runner:
-      #
-      #   1. web/wasm32/template_release/single, threads=no — what gets
-      #      packaged into the Pages export.
-      #   2. linux/x86_64/template_debug/single — needed only by the godot
-      #      editor running on this Linux runner so `--headless --import`
-      #      can actually load the GDExtension and register `Spice3DNode`.
-      #      Without it, GDScript fails to parse `Spice3DNode.new()` in
-      #      main.gd during import, which corrupts the exported pck.
-      #
-      # `threads=no` is REQUIRED. godot-cpp 4.3 defaults `threads` to True
-      # and only appends `.nothreads` to the suffix when threads are
-      # disabled. Our `.gdextension` lists `nothreads.wasm` paths (the only
-      # GDExtension-supported variant on web in 4.3), so without this flag
-      # the build name doesn't match what Godot's export tries to copy.
+      - name: Resolve godot-cpp submodule sha
+        id: godot_cpp_submodule_sha
+        run: echo "sha=$(git -C godot-cpp rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache prebuilt godot-cpp (web + linux artifacts)
+        uses: actions/cache@v4
+        with:
+          path: |
+            godot-cpp/bin
+            godot-cpp/gen
+          key: godot-cpp-prebuilt-${{ steps.godot_cpp_submodule_sha.outputs.sha }}-web-wasm32-template_release-single-nothreads-and-linux-x86_64-template_debug-single
+
       - name: Setup godot-cpp toolchain (web)
         uses: ./godot-cpp/.github/actions/setup-godot-cpp
         with:
@@ -80,7 +56,7 @@ jobs:
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache-web/
         run: |
-          scons target=template_release platform=web arch=wasm32 precision=single threads=no
+          scons -j"$(nproc)" target=template_release platform=web arch=wasm32 precision=single threads=no
 
       - name: Save SCons cache (web)
         uses: ./godot-cpp/.github/actions/godot-cache-save
@@ -98,7 +74,7 @@ jobs:
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache-linux/
         run: |
-          scons target=template_debug platform=linux arch=x86_64 precision=single
+          scons -j"$(nproc)" target=template_debug platform=linux arch=x86_64 precision=single
 
       - name: Save SCons cache (linux)
         uses: ./godot-cpp/.github/actions/godot-cache-save
@@ -106,9 +82,6 @@ jobs:
           scons-cache: ${{ github.workspace }}/.scons-cache-linux/
           cache-name: linux_x86_64_single_template_debug
 
-      # Sanity check: confirm both expected library names landed where
-      # .gdextension and the editor look for them. Failing fast here keeps
-      # future "missing wasm" errors easy to triage.
       - name: Verify GDExtension binaries are in place
         run: |
           set -euo pipefail
@@ -117,8 +90,17 @@ jobs:
           test -f project/bin/web/libspice3d.web.template_release.wasm32.nothreads.wasm
           test -f project/bin/linux/libspice3d.linux.template_debug.x86_64.so
 
-      # Install Godot headless + matching export templates
+      - name: Cache Godot editor binary and export templates
+        id: cache_godot_editor_and_templates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.${{ env.GODOT_STATUS }}
+          key: godot-editor-and-templates-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+
       - name: Install Godot ${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+        if: steps.cache_godot_editor_and_templates.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           ver=${GODOT_VERSION}-${GODOT_STATUS}
@@ -127,8 +109,6 @@ jobs:
           unzip -q godot.zip
           mv "Godot_v${ver}_linux.x86_64" "$HOME/godot"
           chmod +x "$HOME/godot"
-          echo "$HOME" >> "$GITHUB_PATH"
-          "$HOME/godot" --version
 
           curl -fsSL "${base}/Godot_v${ver}_export_templates.tpz" -o templates.tpz
           tpl_dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
@@ -136,12 +116,16 @@ jobs:
           unzip -q templates.tpz
           mv templates/* "$tpl_dir/"
 
-      # Open the project once headless so .godot/ is generated and imports run.
-      - name: Import project
+      - name: Put Godot on PATH
+        run: |
+          chmod +x "$HOME/godot"
+          echo "$HOME" >> "$GITHUB_PATH"
+          "$HOME/godot" --version
+
+      - name: Import project so `.godot/` is generated
         run: |
           set -euo pipefail
           cd project
-          # First run dies after import; rerun to ensure it's clean.
           godot --headless --import || true
           godot --headless --import
 
@@ -153,11 +137,7 @@ jobs:
           godot --headless --export-release "Web" ../build-web/index.html
           ls -la ../build-web
 
-      # Drop coi-serviceworker.js + a tiny loader into the export so that
-      # GitHub Pages (which can't set COOP/COEP) becomes cross-origin-isolated
-      # at runtime. The Service Worker reloads the page once on first visit to
-      # take control; from there SharedArrayBuffer is available.
-      - name: Add coi-serviceworker
+      - name: Add coi-serviceworker (cross-origin isolation on GitHub Pages)
         run: |
           set -euo pipefail
           url="https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/${COI_SERVICEWORKER_GIT_SHA}/coi-serviceworker.js"
@@ -167,22 +147,22 @@ jobs:
           # Godot's exported index.html. Idempotent.
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('build-web/index.html')
-          html = p.read_text()
-          tag = '<script src="coi-serviceworker.js"></script>'
-          if tag not in html:
-              # Insert as the first child of <head>.
-              html = html.replace('<head>', '<head>\n\t' + tag, 1)
-              p.write_text(html)
-              print('injected coi-serviceworker into index.html')
+          exported_index_html_path = Path('build-web/index.html')
+          exported_html = exported_index_html_path.read_text()
+          coi_serviceworker_script_tag = '<script src="coi-serviceworker.js"></script>'
+          if coi_serviceworker_script_tag in exported_html:
+              print('coi-serviceworker script tag already present, leaving alone')
           else:
-              print('coi-serviceworker already present')
+              html_with_script_tag = exported_html.replace(
+                  '<head>',
+                  '<head>\n\t' + coi_serviceworker_script_tag,
+                  1,
+              )
+              exported_index_html_path.write_text(html_with_script_tag)
+              print('injected coi-serviceworker script tag into index.html')
           PY
 
-      # Stage the ngspice bridge + worker JS alongside the export. These
-      # aren't loaded yet (the simulator's web backend is still scaffolding),
-      # but they need to live at predictable URLs once the Worker spawns.
-      - name: Copy ngspice bridge + worker JS
+      - name: Copy ngspice bridge + worker JS into the export
         run: cp project/web/*.js build-web/
 
       - name: Add .nojekyll

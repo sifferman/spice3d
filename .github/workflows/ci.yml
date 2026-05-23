@@ -79,14 +79,11 @@ jobs:
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
         run: |
-          # Web GDExtensions in Godot 4.3 are the single-threaded variant
-          # (godot-cpp appends `.nothreads` to the suffix only when threads
-          # are disabled). Match what pages.yml deploys.
           EXTRA=""
           if [ "${{ matrix.target.platform }}" = "web" ]; then
             EXTRA="threads=no"
           fi
-          scons target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }} $EXTRA
+          scons -j"$(nproc 2>/dev/null || echo 4)" target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }} $EXTRA
 
       - name: Save .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-save

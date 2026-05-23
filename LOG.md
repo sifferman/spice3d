@@ -5,6 +5,49 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — CI speedups (parallelism + prebuilt godot-cpp cache)
+
+Per-step timings from job 77490152616 (total 2181s ≈ 36 min):
+
+| step | time |
+|---|---|
+| Build GDExtension (web) | **1364s** ≈ 23 min |
+| Build GDExtension (linux) | **726s** ≈ 12 min |
+| Install Godot + templates | 19s |
+| Setup godot-cpp toolchain (emsdk download) | 36s |
+| everything else | <15s combined |
+
+Two changes:
+
+1. **`scons -j"$(nproc)"`** in both pages.yml builds and the ci.yml matrix.
+   Runners have 4 logical cores; the existing single-threaded scons left
+   3 idle. Expected ~3x on cold builds.
+
+2. **`actions/cache@v4` over `godot-cpp/bin` + `godot-cpp/gen`** keyed on
+   the godot-cpp submodule SHA + a tag describing the union of both build
+   variants we produce in this job. On a cache hit, scons sees the
+   prebuilt `libgodot-cpp.*.a` archives, the intermediate `.o`s under
+   `bin/obj/`, and the generated bindings under `gen/` as already up to
+   date, and skips godot-cpp entirely. The first run after this change
+   still pays the cold cost (and populates the cache); after that, only
+   our own code recompiles unless the godot-cpp submodule is bumped.
+
+Also cached: the Godot editor binary + matching export templates by
+version. ~20s saved per warm run; skipped via cache-hit conditional.
+
+The previous SCons cache (`.scons-cache-{web,linux}/`) is kept too —
+it's a finer-grained object cache that helps within a build when only
+some files change. The new prebuilt-godot-cpp cache is a coarser layer
+*above* it. They compose: prebuilt-godot-cpp lets the whole godot-cpp
+.a be skipped; SCons cache fills in the rest if a partial rebuild is
+needed.
+
+Stripped explanatory comment blocks from pages.yml at the same time —
+step names now describe themselves, and the few non-obvious bits were
+documented in this LOG instead.
+
+---
+
 ## 2026-05-23 — coi-serviceworker fetch 404 fixed (no tags exist)
 
 Pages run 26321115822 cleared every previous failure — both GDExtension
