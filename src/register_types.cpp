@@ -5,6 +5,7 @@
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
 
+#include "scene/orbit_camera_controller.h"
 #include "spice3d_node.h"
 
 void initialize_spice3d_module(godot::ModuleInitializationLevel module_initialization_level) {
@@ -12,6 +13,7 @@ void initialize_spice3d_module(godot::ModuleInitializationLevel module_initializ
 		return;
 	}
 	GDREGISTER_CLASS(spice3d::Spice3DNode);
+	GDREGISTER_CLASS(spice3d::OrbitCameraController);
 }
 
 void uninitialize_spice3d_module(godot::ModuleInitializationLevel module_initialization_level) {

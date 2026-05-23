@@ -19,8 +19,7 @@ environment = SubResource("Environment_default")
 transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 200, 0)
 light_energy = 1.4
 
-[node name="SchematicCamera" type="Camera3D" parent="."]
-transform = Transform3D(0.821, 0, 0.571, 0.203, 0.935, -0.292, -0.534, 0.356, 0.767, -150, 100, 280)
+[node name="SchematicCamera" type="OrbitCameraController" parent="."]
 fov = 55.0
 near = 0.1
 far = 2000.0
