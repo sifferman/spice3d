@@ -63,7 +63,18 @@ run_emscripten_configure() {
 
 compile_ngspice_binary() {
     cd "$emscripten_build_directory"
-    emmake make -j"$(nproc)"
+    # ngspice's main() expects to run as a CLI program; we want to call
+    # it later via Module.callMain(['-b', '/foo.cir']) from the worker
+    # and write the netlist via Module.FS.writeFile first, so re-export
+    # both. INVOKE_RUN=0 prevents Emscripten from running main() at
+    # module load.
+    local ngspice_emscripten_link_flags=(
+        -sEXPORTED_RUNTIME_METHODS='["FS","callMain"]'
+        -sINVOKE_RUN=0
+        -sALLOW_MEMORY_GROWTH=1
+        -sNO_EXIT_RUNTIME=1
+    )
+    emmake make -j"$(nproc)" LDFLAGS="${ngspice_emscripten_link_flags[*]}"
 }
 
 stage_emscripten_artifacts() {
