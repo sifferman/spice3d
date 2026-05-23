@@ -132,6 +132,12 @@ jobs:
               print('coi-serviceworker already present')
           PY
 
+      # Stage the ngspice bridge + worker JS alongside the export. These
+      # aren't loaded yet (the simulator's web backend is still scaffolding),
+      # but they need to live at predictable URLs once the Worker spawns.
+      - name: Copy ngspice bridge + worker JS
+        run: cp project/web/*.js build-web/
+
       - name: Add .nojekyll
         run: touch build-web/.nojekyll
 

@@ -8,7 +8,4 @@ extends Node
 func _ready() -> void:
 	var s3d := Spice3DNode.new()
 	add_child(s3d)
-	print("spice3d %s — backend: %s" % [
-		s3d.version(),
-		"web" if s3d.is_web_backend() else "native",
-	])
+	print("spice3d %s — backend: %s" % [s3d.version(), s3d.simulator_backend()])

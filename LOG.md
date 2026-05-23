@@ -5,6 +5,58 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-22 — ngspice dual-backend scaffold
+
+### `src/sim/` layout
+```
+sim/
+├── spice_simulator.h        public interface (Sample, SimInitInfo, SpiceSimulator)
+├── spice_simulator.cpp      factory: #ifdef WEB_ENABLED picks one
+├── sample_queue.h           thread-safe FIFO (mutex+vector for v0)
+├── native/                  libngspice impl (gated by SPICE3D_HAVE_LIBNGSPICE)
+└── web/                     JavaScriptBridge → Worker impl (stub)
+```
+
+### Key API decisions
+- **Samples carry timestamps** (`Sample::time`). Non-uniform tran steps mean
+  the renderer must place each on the wall-clock timeline, not assume a fixed
+  rate — captured directly in the type.
+- **Drain-based ingress** (`drain_samples()`). v0 uses a `std::mutex`-guarded
+  `std::vector` (sample_queue.h). Renderer polls each frame. A SAB ring buffer
+  can swap in later without changing the public API.
+- **External voltage sources keyed by lowercase name**. ngspice reports the
+  callback name lowercased ("vbutton1"); host code can pass any case.
+- **`save none` + `esave node`** issued before `bg_tran` to keep ngspice from
+  accumulating an unbounded plot — design doc constraint.
+- **`bg_tran` not `tran`**. Background transient lets ngspice run on its own
+  thread and `ngSpice_Command("bg_halt")` from Godot's thread is how we stop.
+
+### Native compile gate
+`SPICE3D_HAVE_LIBNGSPICE` controls whether `sharedspice.h` is included and
+ngspice C calls are made. Until libngspice is available locally / in CI, the
+native backend compiles as a stub that returns false from `load_netlist` and
+no-op everywhere else. Spice3DNode::simulator_backend() advertises this in
+its return string so GDScript can distinguish "native (libngspice)" from
+"native (stub)".
+
+### Web Worker harness (placeholder)
+`project/web/ngspice_bridge.js` and `project/web/ngspice_worker.js` are in
+place but do nothing useful yet. Bridge sets up `globalThis.spice3d` with the
+expected method names; worker just acks `ready` and errors on every other
+message. pages.yml copies both files into the Pages output so they live at
+predictable URLs the moment the real WASM is ready.
+
+### Open questions / not verified
+- Have not confirmed `godot_cpp/classes/java_script_bridge.hpp` is the
+  correct header path in godot-cpp 4.3 — only validated empirically once a
+  web build runs in CI.
+- `JavaScriptBridge::get_singleton()->eval(...)` is the simplest path for
+  the C++ → JS direction. JS → C++ direction is harder and likely needs to
+  flow through a `JavaScriptObject` callback registered from GDScript;
+  parking that for the real wiring pass.
+
+---
+
 ## 2026-05-22 — GitHub Pages deploy workflow
 
 Added `.github/workflows/pages.yml`. On every push to `main`:

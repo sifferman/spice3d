@@ -55,7 +55,17 @@ target_sources(${LIBNAME}
     src/spice3d_node.cpp
     src/spice3d_node.h
     src/spice3d_version.h
+
+    src/sim/spice_simulator.h
+    src/sim/spice_simulator.cpp
+    src/sim/sample_queue.h
+    src/sim/native/spice_simulator_native.h
+    src/sim/native/spice_simulator_native.cpp
+    src/sim/web/spice_simulator_web.h
+    src/sim/web/spice_simulator_web.cpp
 )
+
+target_include_directories(${LIBNAME} PRIVATE src)
 
 # Fetch a list of the xml files to use for documentation and add to our target
 file(GLOB_RECURSE DOC_XML LIST_DIRECTORIES NO CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/doc_classes/*.xml")
