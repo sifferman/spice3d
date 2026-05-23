@@ -10,6 +10,7 @@
 #include "godot_cpp/variant/vector2.hpp"
 #include "godot_cpp/variant/vector3.hpp"
 
+#include "pdk/zstd_tar_archive_extractor.h"
 #include "scene/schematic_loader.h"
 #include "sim/spice_simulator.h"
 #include "spice3d_version.h"
@@ -203,6 +204,12 @@ void Spice3DNode::_bind_methods() {
 					"xschemrc_file_path",
 					"extra_symbol_search_directories"),
 			&Spice3DNode::load_schematic_and_render_into_node3d);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("extract_zstd_tar_archive_filtered_by_path_substring",
+					"compressed_tar_zst_bytes",
+					"filesystem_output_directory_absolute_path",
+					"keep_only_paths_containing_any_of_these_substrings"),
+			&Spice3DNode::extract_zstd_tar_archive_filtered_by_path_substring);
 }
 
 Spice3DNode::Spice3DNode() = default;
@@ -260,6 +267,25 @@ godot::Dictionary Spice3DNode::load_schematic_into_dictionary(
 			xschemrc_file_path_utf8,
 			search_directories_utf8);
 	return build_schematic_dictionary_from_result(load_result);
+}
+
+godot::Dictionary Spice3DNode::extract_zstd_tar_archive_filtered_by_path_substring(
+		const godot::PackedByteArray &compressed_tar_zst_bytes,
+		const godot::String &filesystem_output_directory_absolute_path,
+		const godot::PackedStringArray &keep_only_paths_containing_any_of_these_substrings) {
+	const std::vector<std::string> path_substrings_to_keep_utf8 =
+			packed_string_array_to_std_vector(keep_only_paths_containing_any_of_these_substrings);
+	const ZstdTarExtractionResult extraction_result = ::spice3d::extract_zstd_tar_archive_filtered_by_path_substring(
+			compressed_tar_zst_bytes.ptr(),
+			static_cast<std::size_t>(compressed_tar_zst_bytes.size()),
+			godot_string_to_std_string(filesystem_output_directory_absolute_path),
+			path_substrings_to_keep_utf8);
+	godot::Dictionary result_dictionary;
+	result_dictionary["was_successful"] = extraction_result.was_successful;
+	result_dictionary["error_message"] = c_string_to_godot_string(extraction_result.error_message);
+	result_dictionary["extracted_file_count"] = extraction_result.extracted_file_count;
+	result_dictionary["total_bytes_written"] = extraction_result.total_bytes_written;
+	return result_dictionary;
 }
 
 godot::Dictionary Spice3DNode::load_schematic_and_render_into_node3d(
