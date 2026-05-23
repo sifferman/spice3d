@@ -186,6 +186,26 @@ jobs:
           cp third_party/ngspice/build-emscripten/ngspice.js build-web/
           cp third_party/ngspice/build-emscripten/ngspice.wasm build-web/
 
+      - name: Inject ngspice_bridge.js into exported index.html
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          exported_index_html_path = Path('build-web/index.html')
+          exported_html = exported_index_html_path.read_text()
+          ngspice_bridge_script_tag = '<script src="ngspice_bridge.js"></script>'
+          if ngspice_bridge_script_tag in exported_html:
+              print('ngspice_bridge.js script tag already present, leaving alone')
+          else:
+              html_with_script_tag = exported_html.replace(
+                  '<head>',
+                  '<head>\n\t' + ngspice_bridge_script_tag,
+                  1,
+              )
+              exported_index_html_path.write_text(html_with_script_tag)
+              print('injected ngspice_bridge.js script tag into index.html')
+          PY
+
       - name: Add .nojekyll
         run: touch build-web/.nojekyll
 
