@@ -5,6 +5,97 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — All five drawing records rendered with rounded capsules
+
+L, B, P, A, and T records (lines, boxes, polygons, arcs, and text
+labels) are now all rendered. Edges are cylindrical with hemispherical
+endcaps via `CapsuleMesh`, so every stroke looks like a smooth round
+extrusion rising out of the table.
+
+### Parser surface (xschem2spice)
+
+The `.sym`/`.sch` parser used to silently skip L/A/P/T records and
+only capture B records when they carried a `name=` (pin) property.
+It now emits a single flat list per symbol/schematic:
+
+```c
+typedef struct {
+    char tag;  /* 'L', 'B', 'P', 'A', or 'T' */
+    union {
+        xs_line       line;
+        xs_box        box;
+        xs_polygon    polygon;
+        xs_arc        arc;
+        xs_text_label text;
+    } data;
+} xs_drawing_record;
+```
+
+Each `xs_symbol` and `xs_schematic` exposes `drawing_records[]` in
+parse order, preserving draw stack from the source file. The
+netlister sees the same data it saw before (its B-as-pin logic is
+unchanged), so SPICE output is byte-stable.
+
+### Consumer surface (spice3d)
+
+`schematic_loader` mirrors that with a C++ `std::variant`:
+
+```cpp
+using DrawingRecord = std::variant<
+        DrawingLineSegment,
+        DrawingBox,
+        DrawingPolygon,
+        DrawingArc,
+        DrawingText>;
+```
+
+`ComponentInstance::symbol_drawing_records_in_local_coordinates`
+holds records as they live in the symbol file (symbol-local frame).
+`Schematic::top_level_drawing_records_in_global_coordinates` holds
+records authored at the schematic level directly.
+
+### Rendering pipeline
+
+A single `render_drawing_record_in_global_coordinates` uses
+`std::visit` to dispatch on the variant. For per-component records,
+`transform_symbol_local_drawing_record_to_schematic_global` first
+applies the instance's rotation+flip+placement (delegating point
+transforms to xschem2spice's `xs_transform_pin_to_global`) and
+returns a new record in schematic-global coords; then the same
+dispatcher handles it. Top-level schematic records skip the
+transform.
+
+Per record type:
+
+- **L**: one `CapsuleMesh` between the two endpoints, oriented in
+  the XZ plane with its long Y-axis along the segment.
+- **B**: four perimeter capsules (corners covered by overlapping
+  hemispheres of adjacent capsules).
+- **P**: open chain of N-1 capsules through the vertices; xschem
+  polygons typically repeat the first vertex at the end to close
+  themselves so the visual loop happens for free.
+- **A**: tessellated into capsules of at most ~6° each; xschem's
+  CCW-on-screen convention maps to schematic_y = center_y − r·sin(θ)
+  because schematic y points down (so does world z after lying flat).
+- **T**: `Label3D` lying flat (rotated −π/2 about world X), then
+  rotated by the record's `rotation_quarter_turns` about world Y.
+  `pixel_size` is derived from xschem's vertical size factor.
+
+### Wires too
+
+Wires switched from `BoxMesh` to the same `CapsuleMesh` helper for
+consistency — they now share `add_capsule_segment_between_two_schematic_points`
+with the drawing-record renderers.
+
+### Capsule orientation
+
+`basis_aligning_local_y_axis_with_xz_plane_direction` builds a
+right-handed basis directly (X = (−dz, 0, dx), Y = (dx, 0, dz),
+Z = (0, 1, 0)) so the capsule's long Y-axis lies along the segment
+without any Euler-angle ordering gotchas.
+
+---
+
 ## 2026-05-23 — Symbol-internal rendering (L + B primitives from .sym files)
 
 Components no longer render as uniform placeholder cubes. Each

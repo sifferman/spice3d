@@ -47,6 +47,62 @@ ComponentPin make_pin_in_global_coordinates(
 	return pin;
 }
 
+DrawingRecord drawing_record_from_xschem_record(const xs_drawing_record &xschem_record) {
+	switch (xschem_record.tag) {
+		case 'L': {
+			DrawingLineSegment line;
+			line.x1 = xschem_record.data.line.x1;
+			line.y1 = xschem_record.data.line.y1;
+			line.x2 = xschem_record.data.line.x2;
+			line.y2 = xschem_record.data.line.y2;
+			return line;
+		}
+		case 'B': {
+			DrawingBox box;
+			box.x1 = xschem_record.data.box.x1;
+			box.y1 = xschem_record.data.box.y1;
+			box.x2 = xschem_record.data.box.x2;
+			box.y2 = xschem_record.data.box.y2;
+			return box;
+		}
+		case 'P': {
+			DrawingPolygon polygon;
+			const int vertex_count = xschem_record.data.polygon.vertex_count;
+			polygon.vertex_xs.assign(
+					xschem_record.data.polygon.vertex_xs,
+					xschem_record.data.polygon.vertex_xs + vertex_count);
+			polygon.vertex_ys.assign(
+					xschem_record.data.polygon.vertex_ys,
+					xschem_record.data.polygon.vertex_ys + vertex_count);
+			return polygon;
+		}
+		case 'A': {
+			DrawingArc arc;
+			arc.center_x = xschem_record.data.arc.center_x;
+			arc.center_y = xschem_record.data.arc.center_y;
+			arc.radius = xschem_record.data.arc.radius;
+			arc.start_angle_degrees = xschem_record.data.arc.start_angle_degrees;
+			arc.sweep_angle_degrees = xschem_record.data.arc.sweep_angle_degrees;
+			return arc;
+		}
+		default: {
+			DrawingText text;
+			text.text = copy_c_string_or_empty(xschem_record.data.text.text);
+			text.anchor_x = xschem_record.data.text.anchor_x;
+			text.anchor_y = xschem_record.data.text.anchor_y;
+			text.rotation_quarter_turns = xschem_record.data.text.rotation_quarter_turns;
+			text.flip = xschem_record.data.text.flip;
+			text.horizontal_size_factor = xschem_record.data.text.horizontal_size_factor;
+			text.vertical_size_factor = xschem_record.data.text.vertical_size_factor;
+			return text;
+		}
+	}
+}
+
+std::vector<DrawingRecord> drawing_records_vector_from_xschem(
+		const xs_drawing_record *xschem_records,
+		int xschem_record_count);
+
 void populate_symbol_dependent_fields(const xs_instance &instance, ComponentInstance &component) {
 	if (!instance.resolved_symbol) {
 		component.symbol_was_resolved = false;
@@ -61,6 +117,19 @@ void populate_symbol_dependent_fields(const xs_instance &instance, ComponentInst
 		component.pins_in_global_coordinates.push_back(
 				make_pin_in_global_coordinates(instance, resolved_symbol.pins[pin_index]));
 	}
+	component.symbol_drawing_records_in_local_coordinates = drawing_records_vector_from_xschem(
+			resolved_symbol.drawing_records, resolved_symbol.drawing_record_count);
+}
+
+std::vector<DrawingRecord> drawing_records_vector_from_xschem(
+		const xs_drawing_record *xschem_records,
+		int xschem_record_count) {
+	std::vector<DrawingRecord> records;
+	records.reserve(xschem_record_count);
+	for (int record_index = 0; record_index < xschem_record_count; ++record_index) {
+		records.push_back(drawing_record_from_xschem_record(xschem_records[record_index]));
+	}
+	return records;
 }
 
 WireSegment make_wire_segment(const xs_wire &xschem_wire) {
@@ -138,6 +207,8 @@ Schematic schematic_from_parsed_xschem(const xs_schematic &parsed_schematic) {
 	schematic.cell_name = copy_c_string_or_empty(parsed_schematic.cell_name);
 	schematic.wires = wires_from_parsed_xschem(parsed_schematic);
 	schematic.component_instances = components_from_parsed_xschem(parsed_schematic);
+	schematic.top_level_drawing_records_in_global_coordinates = drawing_records_vector_from_xschem(
+			parsed_schematic.drawing_records, parsed_schematic.drawing_record_count);
 	return schematic;
 }
 
