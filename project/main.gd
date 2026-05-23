@@ -12,19 +12,38 @@ const XSCHEM_UPSTREAM_GIT_SHA := "d7f3980301eb9f12954a8542d55b188ffe851770"
 const XSCHEM_UPSTREAM_RAW_URL_TEMPLATE := \
 		"https://raw.githubusercontent.com/StefanSchippers/xschem/%s/xschem_library/devices/%s"
 const XSCHEM_STDLIB_CACHE_DIR := "user://xschem_stdlib/" + XSCHEM_UPSTREAM_GIT_SHA
-const REQUIRED_STDLIB_SYMBOL_FILE_NAMES := ["opin.sym", "ipin.sym"]
+const REQUIRED_STDLIB_SYMBOL_FILE_NAMES := [
+	"ipin.sym",
+	"opin.sym",
+	"iopin.sym",
+	"title.sym",
+]
 
 
 func _ready() -> void:
+	request_persistent_browser_storage_on_web()
 	stage_bundled_schematic_files_to_writable_directory()
 	await ensure_required_stdlib_symbols_are_cached()
-	stage_cached_stdlib_symbols_alongside_the_schematic()
 	var spice3d_root_node := Spice3DNode.new()
 	add_child(spice3d_root_node)
-	var staged_top_schematic_path := absolute_path_for_staged_schematic_file(TOP_SCHEMATIC_FILE_NAME)
+	var staged_top_schematic_absolute_path := absolute_path_for_staged_schematic_file(TOP_SCHEMATIC_FILE_NAME)
+	var extra_symbol_search_directories := PackedStringArray([
+		absolute_path_for_xschem_stdlib_cache_directory(),
+	])
 	var loaded_schematic := spice3d_root_node.load_schematic_and_render_into_node3d(
-			schematic_view, staged_top_schematic_path, "")
+			schematic_view,
+			staged_top_schematic_absolute_path,
+			"",
+			extra_symbol_search_directories)
 	update_status_text(spice3d_root_node, loaded_schematic)
+
+
+func request_persistent_browser_storage_on_web() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval(
+			"navigator.storage && navigator.storage.persist && navigator.storage.persist();",
+			true)
 
 
 func stage_bundled_schematic_files_to_writable_directory() -> void:
@@ -66,13 +85,6 @@ func download_one_stdlib_symbol_into_cache(symbol_file_name: String, cache_desti
 	cache_file.close()
 
 
-func stage_cached_stdlib_symbols_alongside_the_schematic() -> void:
-	for one_symbol_file_name in REQUIRED_STDLIB_SYMBOL_FILE_NAMES:
-		var cache_source_path := "%s/%s" % [XSCHEM_STDLIB_CACHE_DIR, one_symbol_file_name]
-		var staged_destination_path := "%s/%s" % [SCHEMATIC_STAGED_DIR, one_symbol_file_name]
-		copy_file_via_godot_filesystem(cache_source_path, staged_destination_path)
-
-
 func copy_file_via_godot_filesystem(source_path: String, destination_path: String) -> void:
 	var source_file := FileAccess.open(source_path, FileAccess.READ)
 	if source_file == null:
@@ -87,6 +99,10 @@ func copy_file_via_godot_filesystem(source_path: String, destination_path: Strin
 
 func absolute_path_for_staged_schematic_file(staged_file_name: String) -> String:
 	return "%s/examples/button/%s" % [OS.get_user_data_dir(), staged_file_name]
+
+
+func absolute_path_for_xschem_stdlib_cache_directory() -> String:
+	return "%s/xschem_stdlib/%s" % [OS.get_user_data_dir(), XSCHEM_UPSTREAM_GIT_SHA]
 
 
 func update_status_text(spice3d_root_node: Node, loaded_schematic: Dictionary) -> void:

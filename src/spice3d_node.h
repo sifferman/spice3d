@@ -6,6 +6,7 @@
 #include "godot_cpp/classes/node3d.hpp"
 #include "godot_cpp/classes/wrapped.hpp"
 #include "godot_cpp/variant/dictionary.hpp"
+#include "godot_cpp/variant/packed_string_array.hpp"
 #include "godot_cpp/variant/string.hpp"
 
 namespace spice3d {
@@ -27,11 +28,13 @@ public:
 	godot::String describe_simulator_backend();
 	godot::Dictionary load_schematic_into_dictionary(
 			const godot::String &schematic_file_path,
-			const godot::String &xschemrc_file_path);
+			const godot::String &xschemrc_file_path,
+			const godot::PackedStringArray &extra_symbol_search_directories);
 	godot::Dictionary load_schematic_and_render_into_node3d(
 			godot::Node3D *parent_node_for_rendered_meshes,
 			const godot::String &schematic_file_path,
-			const godot::String &xschemrc_file_path);
+			const godot::String &xschemrc_file_path,
+			const godot::PackedStringArray &extra_symbol_search_directories);
 
 private:
 	std::unique_ptr<SpiceSimulator> simulator;

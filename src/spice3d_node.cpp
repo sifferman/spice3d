@@ -191,13 +191,17 @@ void Spice3DNode::_bind_methods() {
 			godot::D_METHOD("describe_simulator_backend"),
 			&Spice3DNode::describe_simulator_backend);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("load_schematic_into_dictionary", "schematic_file_path", "xschemrc_file_path"),
+			godot::D_METHOD("load_schematic_into_dictionary",
+					"schematic_file_path",
+					"xschemrc_file_path",
+					"extra_symbol_search_directories"),
 			&Spice3DNode::load_schematic_into_dictionary);
 	godot::ClassDB::bind_method(
 			godot::D_METHOD("load_schematic_and_render_into_node3d",
 					"parent_node_for_rendered_meshes",
 					"schematic_file_path",
-					"xschemrc_file_path"),
+					"xschemrc_file_path",
+					"extra_symbol_search_directories"),
 			&Spice3DNode::load_schematic_and_render_into_node3d);
 }
 
@@ -229,26 +233,48 @@ godot::String Spice3DNode::describe_simulator_backend() {
 #endif
 }
 
+namespace {
+
+std::vector<std::string> packed_string_array_to_std_vector(
+		const godot::PackedStringArray &godot_string_array) {
+	std::vector<std::string> std_vector;
+	std_vector.reserve(godot_string_array.size());
+	for (int element_index = 0; element_index < godot_string_array.size(); ++element_index) {
+		std_vector.push_back(godot_string_to_std_string(godot_string_array[element_index]));
+	}
+	return std_vector;
+}
+
+} // namespace
+
 godot::Dictionary Spice3DNode::load_schematic_into_dictionary(
 		const godot::String &schematic_file_path,
-		const godot::String &xschemrc_file_path) {
+		const godot::String &xschemrc_file_path,
+		const godot::PackedStringArray &extra_symbol_search_directories) {
 	const std::string schematic_file_path_utf8 = godot_string_to_std_string(schematic_file_path);
 	const std::string xschemrc_file_path_utf8 = godot_string_to_std_string(xschemrc_file_path);
+	const std::vector<std::string> search_directories_utf8 =
+			packed_string_array_to_std_vector(extra_symbol_search_directories);
 	const SchematicLoadResult load_result = load_schematic_from_file(
 			schematic_file_path_utf8,
-			xschemrc_file_path_utf8);
+			xschemrc_file_path_utf8,
+			search_directories_utf8);
 	return build_schematic_dictionary_from_result(load_result);
 }
 
 godot::Dictionary Spice3DNode::load_schematic_and_render_into_node3d(
 		godot::Node3D *parent_node_for_rendered_meshes,
 		const godot::String &schematic_file_path,
-		const godot::String &xschemrc_file_path) {
+		const godot::String &xschemrc_file_path,
+		const godot::PackedStringArray &extra_symbol_search_directories) {
 	const std::string schematic_file_path_utf8 = godot_string_to_std_string(schematic_file_path);
 	const std::string xschemrc_file_path_utf8 = godot_string_to_std_string(xschemrc_file_path);
+	const std::vector<std::string> search_directories_utf8 =
+			packed_string_array_to_std_vector(extra_symbol_search_directories);
 	const SchematicLoadResult load_result = load_schematic_from_file(
 			schematic_file_path_utf8,
-			xschemrc_file_path_utf8);
+			xschemrc_file_path_utf8,
+			search_directories_utf8);
 	if (load_result.was_successful && parent_node_for_rendered_meshes != nullptr) {
 		add_rendered_meshes_for_schematic_to_parent_node(
 				parent_node_for_rendered_meshes,
