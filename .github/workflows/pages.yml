@@ -38,7 +38,7 @@ concurrency:
 env:
   GODOT_VERSION: 4.3
   GODOT_STATUS: stable
-  COI_SERVICEWORKER_VERSION: v0.1.7
+  COI_SERVICEWORKER_GIT_SHA: 7b1d2a092d0d2dd2b7270b6f12f13605de26f214
 
 jobs:
   build:
@@ -160,7 +160,7 @@ jobs:
       - name: Add coi-serviceworker
         run: |
           set -euo pipefail
-          url="https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/${COI_SERVICEWORKER_VERSION}/coi-serviceworker.js"
+          url="https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/${COI_SERVICEWORKER_GIT_SHA}/coi-serviceworker.js"
           curl -fsSL "$url" -o build-web/coi-serviceworker.js
 
           # Inject <script src="coi-serviceworker.js"> into the head of

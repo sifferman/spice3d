@@ -5,6 +5,26 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — coi-serviceworker fetch 404 fixed (no tags exist)
+
+Pages run 26321115822 cleared every previous failure — both GDExtension
+binaries built, import + export succeeded — then 404'd at:
+`https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/v0.1.7/coi-serviceworker.js`
+
+Root cause: I invented `v0.1.7`. The coi-serviceworker repo has **no
+tags at all** (confirmed via `/repos/gzuidhof/coi-serviceworker/tags`
+returns `[]`); only a `master` branch.
+
+Fix: pin to the current master SHA
+`7b1d2a092d0d2dd2b7270b6f12f13605de26f214` and rename the env var to
+`COI_SERVICEWORKER_GIT_SHA` to make the pinning style explicit at the
+callsite. Verified the SHA-pinned URL returns HTTP 200.
+
+SHA pinning is the right pattern here regardless of whether tags
+existed — moving tags would silently change a deployed dependency.
+
+---
+
 ## 2026-05-23 — Coding-standards sweep across all session-added code
 
 User set a project-wide style: self-documenting names, no comments,
