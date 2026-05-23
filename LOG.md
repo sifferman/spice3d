@@ -5,6 +5,30 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — First live deploy + visible sanity label
+
+Deploy went live at https://ethan.sifferman.dev/spice3d/. The page loaded
+into a gray rectangle — main.tscn was a plain `Node` (non-visible
+container), so the scene rendered nothing. The console line
+`spice3d 0.1.0-dev - backend: web (...)` was the only proof the stack
+worked.
+
+Replaced main.tscn root with a `Control` + `ColorRect` background +
+centered `Label`. main.gd now writes the version + backend tag into the
+Label as well as printing it. The page itself now confirms at a glance
+that the GDExtension loaded, Spice3DNode registered, and WEB_ENABLED
+selected the right backend.
+
+Also visible in the console:
+- `WebAssembly try' instruction is deprecated, use 'try_table'` — emcc
+  deprecation warning; benign, harmless, upstream Godot's problem.
+- `An AudioContext was prevented from starting automatically` — Chrome
+  autoplay policy; benign until we play audio.
+- `Source map error: URL constructor: is not a valid URL` — Firefox
+  devtools artifact on the wasm Module; benign.
+
+---
+
 ## 2026-05-23 — CI speedups (parallelism + prebuilt godot-cpp cache)
 
 Per-step timings from job 77490152616 (total 2181s ≈ 36 min):
