@@ -15,7 +15,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GODOT_VERSION: 4.3
+  # Stuck at 4.4.1 because Godot 4.5 introduced godot#111645:
+  # https://github.com/godotengine/godot/issues/111645
+  GODOT_VERSION: 4.4.1
   GODOT_STATUS: stable
   COI_SERVICEWORKER_GIT_SHA: 7b1d2a092d0d2dd2b7270b6f12f13605de26f214
 
@@ -32,15 +34,32 @@ jobs:
         id: godot_cpp_submodule_sha
         run: echo "sha=$(git -C godot-cpp rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache prebuilt godot-cpp (web + linux artifacts)
-        uses: actions/cache@v4
+      # Linux must build before the web setup activates emsdk, or
+      # PATH pollution breaks the native compile.
+      - name: Setup godot-cpp toolchain (linux)
+        uses: ./godot-cpp/.github/actions/setup-godot-cpp
         with:
-          path: |
-            godot-cpp/bin
-            godot-cpp/gen
-          key: godot-cpp-prebuilt-${{ steps.godot_cpp_submodule_sha.outputs.sha }}-web-wasm32-template_release-single-nothreads-and-linux-x86_64-template_debug-single
+          platform: linux
 
-      - name: Setup godot-cpp toolchain (web)
+      - name: Restore SCons cache (linux)
+        uses: ./godot-cpp/.github/actions/godot-cache-restore
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache-linux/
+          cache-name: linux_x86_64_single_template_debug
+
+      - name: Build GDExtension (linux template_debug, host-side only)
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache-linux/
+        run: |
+          scons -j"$(nproc)" target=template_debug platform=linux arch=x86_64 precision=single
+
+      - name: Save SCons cache (linux)
+        uses: ./godot-cpp/.github/actions/godot-cache-save
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache-linux/
+          cache-name: linux_x86_64_single_template_debug
+
+      - name: Setup godot-cpp toolchain (web, adds emsdk)
         uses: ./godot-cpp/.github/actions/setup-godot-cpp
         with:
           platform: web
@@ -63,24 +82,6 @@ jobs:
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache-web/
           cache-name: web_wasm32_single_nothreads_template_release
-
-      - name: Restore SCons cache (linux)
-        uses: ./godot-cpp/.github/actions/godot-cache-restore
-        with:
-          scons-cache: ${{ github.workspace }}/.scons-cache-linux/
-          cache-name: linux_x86_64_single_template_debug
-
-      - name: Build GDExtension (linux template_debug, host-side only)
-        env:
-          SCONS_CACHE: ${{ github.workspace }}/.scons-cache-linux/
-        run: |
-          scons -j"$(nproc)" target=template_debug platform=linux arch=x86_64 precision=single
-
-      - name: Save SCons cache (linux)
-        uses: ./godot-cpp/.github/actions/godot-cache-save
-        with:
-          scons-cache: ${{ github.workspace }}/.scons-cache-linux/
-          cache-name: linux_x86_64_single_template_debug
 
       - name: Verify GDExtension binaries are in place
         run: |

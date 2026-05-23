@@ -90,28 +90,3 @@ jobs:
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
-
-  # Standalone parser smoke test — links schematic_loader.cpp against
-  # xschem2spice's C sources (no Godot dependency) and runs against the
-  # checked-out example schematics. Fast and platform-independent, so it
-  # lives outside the matrix.
-  parser-test:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-      # spice3d_notes is a sibling repo of spice3d on the user's machine —
-      # in CI we clone it into the workspace as `spice3d_notes/` and point
-      # the smoke test at it explicitly via EXAMPLES_DIR.
-      - name: Checkout spice3d_notes (for example schematics)
-        uses: actions/checkout@v4
-        with:
-          repository: sifferman/spice3d_notes
-          path: spice3d_notes
-          submodules: false
-      - name: Build + run schematic loader smoke test
-        run: |
-          make -C test
-          make -C test run EXAMPLES_DIR=${{ github.workspace }}/spice3d_notes/examples

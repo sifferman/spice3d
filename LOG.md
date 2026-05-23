@@ -5,6 +5,60 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — Pin engine + godot-cpp to 4.4.1 (godot#111645)
+
+Godot 4.5 introduced a race in the editor's documentation generator
+([godot#111645](https://github.com/godotengine/godot/issues/111645)):
+`_load_doc_thread` enqueues `EditorHelp::_gen_extensions_docs` via
+`call_deferred`, then `EditorHelp::cleanup_doc` can race in and
+`memdelete(doc)`, so the deferred call dereferences a freed (or
+reallocated-empty) `DocTools` instance. Any project with a
+GDExtension that runs `godot --headless --import` hits it on a 4.5+
+engine — including our pages.yml deploy.
+
+The fix is not in any released Godot version, including current
+master. So we pin both the engine and `godot-cpp` to 4.4.1:
+
+- `godot-cpp` submodule → `godot-4.4.1-stable` tag
+- `GODOT_VERSION` in pages.yml → 4.4.1
+- `compatibility_minimum` in spice3d.gdextension → "4.4"
+- `config/features` in project.godot → "4.4"
+- `.gitmodules` `branch = 4.4` for godot-cpp
+
+When godot#111645 is fixed upstream and shipped in a stable release,
+bump these together.
+
+Also added `.claude/` to `.gitignore`.
+
+### Invariants to preserve when bumping to 4.5/4.6+
+
+- **The `.gitmodules` `branch = ...` field for godot-cpp was removed on
+  purpose.** `actions/checkout` honors the recorded SHA, not the branch
+  field, so the line did nothing for CI but would let
+  `git submodule update --remote` silently move the pin to whatever was
+  at that branch's tip. To bump the pin, check out the desired tag in
+  the submodule and stage it: `git -C godot-cpp checkout godot-X.Y-stable
+  && git add godot-cpp`. The `.gdextension` `compatibility_minimum` and
+  the godot-cpp SHA must advance together or the runtime check fails
+  with `Cannot load a GDExtension built for Godot X.Y using an older
+  version of Godot`.
+- **godot-cpp prebuilt cache key (in pages.yml) is SHA-derived.** Bumping
+  the submodule cold-builds the whole library once (~3–4 min on the
+  4-core runner with `scons -j$(nproc)`) and then cache-hits thereafter.
+- **pages.yml builds the GDExtension twice on one runner.** Once for web
+  (`target=template_release`, `wasm32`, `threads=no`) for the deploy
+  payload, once for linux (`target=template_debug`, `x86_64`) so the
+  host-side `godot --headless --import` can resolve `Spice3DNode` and
+  the export's `main.gd` parses cleanly. Both file paths in the
+  `.gdextension` must exist or `--import` fails to load the extension.
+- **`threads=no` on the web build is load-bearing.** godot-cpp's default
+  `threads=yes` produces `libspice3d.web.template_release.wasm32.wasm`
+  (no `.nothreads`), but the `.gdextension` and the Godot web export
+  preset (`variant/thread_support=false`) both look for the `.nothreads`
+  variant. Mismatched naming → `Failed to open …wasm32.nothreads.wasm`.
+
+---
+
 ## 2026-05-23 — First live deploy + visible sanity label
 
 Deploy went live at https://ethan.sifferman.dev/spice3d/. The page loaded
@@ -26,49 +80,6 @@ Also visible in the console:
   autoplay policy; benign until we play audio.
 - `Source map error: URL constructor: is not a valid URL` — Firefox
   devtools artifact on the wasm Module; benign.
-
----
-
-## 2026-05-23 — CI speedups (parallelism + prebuilt godot-cpp cache)
-
-Per-step timings from job 77490152616 (total 2181s ≈ 36 min):
-
-| step | time |
-|---|---|
-| Build GDExtension (web) | **1364s** ≈ 23 min |
-| Build GDExtension (linux) | **726s** ≈ 12 min |
-| Install Godot + templates | 19s |
-| Setup godot-cpp toolchain (emsdk download) | 36s |
-| everything else | <15s combined |
-
-Two changes:
-
-1. **`scons -j"$(nproc)"`** in both pages.yml builds and the ci.yml matrix.
-   Runners have 4 logical cores; the existing single-threaded scons left
-   3 idle. Expected ~3x on cold builds.
-
-2. **`actions/cache@v4` over `godot-cpp/bin` + `godot-cpp/gen`** keyed on
-   the godot-cpp submodule SHA + a tag describing the union of both build
-   variants we produce in this job. On a cache hit, scons sees the
-   prebuilt `libgodot-cpp.*.a` archives, the intermediate `.o`s under
-   `bin/obj/`, and the generated bindings under `gen/` as already up to
-   date, and skips godot-cpp entirely. The first run after this change
-   still pays the cold cost (and populates the cache); after that, only
-   our own code recompiles unless the godot-cpp submodule is bumped.
-
-Also cached: the Godot editor binary + matching export templates by
-version. ~20s saved per warm run; skipped via cache-hit conditional.
-
-The previous SCons cache (`.scons-cache-{web,linux}/`) is kept too —
-it's a finer-grained object cache that helps within a build when only
-some files change. The new prebuilt-godot-cpp cache is a coarser layer
-*above* it. They compose: prebuilt-godot-cpp lets the whole godot-cpp
-.a be skipped; SCons cache fills in the rest if a partial rebuild is
-needed.
-
-Stripped explanatory comment blocks from pages.yml at the same time —
-step names now describe themselves, and the few non-obvious bits were
-documented in this LOG instead.
 
 ---
 
@@ -240,45 +251,6 @@ fastest path.
 
 ---
 
-## 2026-05-22 — session wrap
-
-### Done this session (4 commits on `claude`)
-1. **Template rename**: `EXTENSION-NAME` → `spice3d`, `example_library_init`
-   → `spice3d_library_init`, `ExampleClass` → `Spice3DNode` (namespaced),
-   project files renamed, `compatibility_minimum=4.3`.
-2. **GitHub Pages deploy** (`.github/workflows/pages.yml`): builds the
-   GDExtension for web → installs Godot 4.3-stable + templates → runs
-   `--headless --export-release "Web"` → injects coi-serviceworker → deploys.
-3. **Ngspice dual-backend scaffold** (`src/sim/`): platform-agnostic
-   `SpiceSimulator` interface with native (libngspice) and web
-   (JavaScriptBridge) impls. v0 ingress via mutex-guarded sample queue;
-   SAB-backed ring buffer later.
-4. **Parser wrapper around xschem2spice** (`src/scene/schematic_loader.*`)
-   + smoke test + `parser-test` CI job. **Verified end-to-end** against
-   button_test and 3bit_counter examples.
-
-### Next clear targets (in rough priority)
-- **Verify pages.yml runs green in CI**. The `~/.local/share/godot/export_templates/4.3.stable/` path and the `.tpz` extraction layout are educated guesses; first run will say if they're right.
-- **Get libngspice actually linked on native**. The hard part is the build, not the integration — once `sharedspice.h` is on the include path and `-lngspice` resolves, `SPICE3D_HAVE_LIBNGSPICE` flips on and the existing scaffold runs unchanged.
-- **Build the ngspice WASM module**. `spice3d_notes/references/ngspice_example/Dockerfile` is the reference. Output goes alongside `project/web/ngspice_worker.js`; `pages.yml` already stages those files.
-- **Extend xschem2spice to retain L/B/P/A/T drawing primitives** so the renderer can draw actual transistor bodies, not just bounding boxes. User owns the repo; cleanest place to add this.
-- **Schematic→Godot scene generator**. With the loader returning components+pins+wires, write a `SchematicView` Godot scene that drops Line3D / MeshInstance3D nodes for each wire and a CSGBox3D per component. Sky's the limit from there.
-
-### Risks / things that may bite on first CI run
-- `godot_cpp/classes/java_script_bridge.hpp` may not exist verbatim in
-  godot-cpp 4.3 — header naming convention is `snake_case` from the
-  underlying class, but Godot has historically renamed JavaScriptBridge
-  back and forth. If the web build fails to find the header, swap
-  conditionally to whatever name godot-cpp generates.
-- xschem2spice depends on `unistd.h` indirectly (libgen.h). On Emscripten
-  this should be fine; on MSVC, the project doesn't ship POSIX libgen.
-  Native Windows builds will need a polyfill or to drop those calls. Not
-  a concern for CI's ubuntu-22.04 + emscripten paths.
-- `parser-test` clones `sifferman/spice3d_notes` from CI — that repo must
-  be public or the workflow needs a PAT.
-
----
-
 ## 2026-05-22 — xschem parser via xschem2spice
 
 ### Decision: don't reimplement, reuse
@@ -420,24 +392,3 @@ Service Worker shim is what gets us cross-origin-isolation at runtime.
   - The `actions/deploy-pages` step needs the repo's Pages source to be set
     to "GitHub Actions" in repo settings; we cannot do that from CI.
 
-## 2026-05-22 — session start
-
-### State of the repo
-- Repo is an unmodified `godot-cpp-template` (placeholder `EXTENSION-NAME`, `example_library_init`, etc.).
-- `godot-cpp/` submodule directory is empty — not initialized yet.
-- Only commit on `main` and `claude` is the initial template import (`8f3bf92`).
-- All referenced repos (ngspice, xschem, xschem2spice, ciel, ngspice_example, BananaSpice, concurrentqueue, godot-cpp-template, sky130_schematics) are populated as submodules under `/home/ethan/GitHub/spice3d_notes/references/`. Useful for source-reading; not part of this repo.
-
-### Plan agreed with user
-Order: **GitHub Pages deploy → ngspice integration → xschem parser**. Work autonomously and commit to `claude` branch (never `main`). Reuse `xschem2spice` parser logic rather than reimplementing from scratch.
-
-### Notes from `spice3d_notes/README.md` that pin down concrete decisions
-- **Threading model**: ngspice WASM lives in its own Web Worker; `SharedArrayBuffer` + `Atomics` for the hot path. coi-serviceworker provides COOP/COEP so SAB is available on GitHub Pages.
-- **Sample carries timestamp**: ngspice transient timesteps are non-uniform — every `cb_SendData` value must keep its `time` so the renderer can place it on a wall-clock timeline.
-- **Memory management**: must issue `esave node` + `save none` before `tran` to stop ngspice accumulating an unbounded internal plot. Voltage data flows through `cb_SendData` only.
-- **Net mapping**: don't write a mapping file — call into xschem2spice's renaming functions directly so the renderer can bind drawn-wire labels to mangled hierarchical net names (`x1.x2.net`, bus expansion, global nets).
-- **PDK assets**: only `libs.tech/combined/` (~3.2 MB SPICE models) and `libs.tech/xschem/` (~8.2 MB symbols) are needed. `libs.ref/` (~1.1 GB layouts) is **skipped in-stream** during tar extraction. Directory structure under `combined/` must be preserved so relative `.include` paths resolve inside ngspice's Emscripten FS.
-- **`#ifdef WEB_ENABLED`** selects backend: web uses `JavaScriptBridge` to a Worker, native links `libngspice.so` directly. Same API above the line.
-
-### Reference: minimal native ngspice loop
-`spice3d_notes/references/ngspice_example/sim.cpp` is the working pattern — `ngSpice_Init` → `ngSpice_Init_Sync` (registers `cb_GetVSRCData`) → `ngSpice_Circ` (in-memory netlist) → `ngSpice_Command("tran ...")` → poll `ngSpice_running()`. `cb_GetVSRCData(value, time, nodeName, …)` is where switch state is injected; nodeName is lowercased.

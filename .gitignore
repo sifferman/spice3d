@@ -65,6 +65,9 @@ CMakeUserPresets.json
 test/test_schematic_loader
 build-web/
 
+# Claude Code session state
+.claude/
+
 # xschem2spice's own Makefile build outputs (when invoked directly)
 third_party/xschem2spice/libxschem2spice.a
 third_party/xschem2spice/xschem2spice
