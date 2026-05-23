@@ -360,7 +360,7 @@ func copy_file_via_godot_filesystem(source_path: String, destination_path: Strin
 
 
 func absolute_path_for_staged_schematic_file(staged_file_name: String) -> String:
-	return "%s/examples/button/%s" % [OS.get_user_data_dir(), staged_file_name]
+	return "%s/examples/%s/%s" % [OS.get_user_data_dir(), ACTIVE_EXAMPLE_DIRECTORY_NAME, staged_file_name]
 
 
 func absolute_path_for_xschem_devices_library_directory() -> String:
