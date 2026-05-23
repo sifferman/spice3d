@@ -39,10 +39,6 @@ env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
 env.Append(CPPPATH=["src/", "third_party/xschem2spice/src/", "third_party/zstd/lib/"])
 
-# zstd is decompress-only here; the x86_64 assembly path is excluded so the
-# same source list compiles for web (wasm32) and any non-x86 native target.
-env.Append(CPPDEFINES=["ZSTD_DISABLE_ASM=1"])
-
 # xschem2spice ships a tiny CLI driver in xschem2spice.c that has its own
 # main() — exclude it. We link the library sources directly into the
 # GDExtension instead of building a separate static library.
@@ -51,10 +47,20 @@ xschem2spice_sources = [
     if str(f).split("/")[-1] != "xschem2spice.c"
 ]
 
-zstd_decompress_sources = (
-    Glob("third_party/zstd/lib/common/*.c")
-    + Glob("third_party/zstd/lib/decompress/*.c")
-)
+# zstd is decompress-only here; ZSTD_DISABLE_ASM excludes the x86_64
+# assembly path so the same source list compiles for web (wasm32) and any
+# non-x86 native target. Applied on a cloned env so the define is scoped to
+# zstd's own .c files — adding it globally would change every other .o's
+# compile flags and invalidate the entire SCons cache on every rebuild.
+zstd_decompress_env = env.Clone()
+zstd_decompress_env.Append(CPPDEFINES=["ZSTD_DISABLE_ASM=1"])
+zstd_decompress_objects = [
+    zstd_decompress_env.SharedObject(source=one_source)
+    for one_source in (
+        Glob("third_party/zstd/lib/common/*.c")
+        + Glob("third_party/zstd/lib/decompress/*.c")
+    )
+]
 
 sources = (
     Glob("src/*.cpp")
@@ -64,7 +70,7 @@ sources = (
     + Glob("src/scene/*.cpp")
     + Glob("src/pdk/*.cpp")
     + xschem2spice_sources
-    + zstd_decompress_sources
+    + zstd_decompress_objects
 )
 
 if env["target"] in ["editor", "template_debug"]:
