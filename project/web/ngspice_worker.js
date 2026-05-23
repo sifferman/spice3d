@@ -71,6 +71,20 @@ function writeFileIntoEmscriptenVirtualFileSystem(filePath, fileText) {
 	self.Module.FS.writeFile(filePath, fileText);
 }
 
+function provideFakeProcMeminfoSoNgspiceDoesNotAbort() {
+	// ngspice reads /proc/meminfo on startup to size its output buffers;
+	// without it the run aborts with "Setting the output memory is not
+	// possible." A reasonable lie keeps the simulator happy.
+	const fakeProcMeminfoText = [
+		'MemTotal:        1048576 kB',
+		'MemFree:         1048576 kB',
+		'MemAvailable:    1048576 kB',
+		'',
+	].join('\n');
+	self.Module.FS.mkdirTree('/proc');
+	self.Module.FS.writeFile('/proc/meminfo', fakeProcMeminfoText);
+}
+
 function runNgspiceInBatchMode(virtualNetlistPath) {
 	let exitStatus = 0;
 	try {
@@ -84,6 +98,7 @@ function runNgspiceInBatchMode(virtualNetlistPath) {
 }
 
 function runSmokeTestAfterModuleReady() {
+	provideFakeProcMeminfoSoNgspiceDoesNotAbort();
 	const smokeTestNetlistPath = '/spice3d_smoke_test.cir';
 	writeFileIntoEmscriptenVirtualFileSystem(smokeTestNetlistPath, SMOKE_TEST_NETLIST_TEXT);
 	const exitStatus = runNgspiceInBatchMode(smokeTestNetlistPath);
