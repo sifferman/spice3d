@@ -5,6 +5,45 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-22 — session wrap
+
+### Done this session (4 commits on `claude`)
+1. **Template rename**: `EXTENSION-NAME` → `spice3d`, `example_library_init`
+   → `spice3d_library_init`, `ExampleClass` → `Spice3DNode` (namespaced),
+   project files renamed, `compatibility_minimum=4.3`.
+2. **GitHub Pages deploy** (`.github/workflows/pages.yml`): builds the
+   GDExtension for web → installs Godot 4.3-stable + templates → runs
+   `--headless --export-release "Web"` → injects coi-serviceworker → deploys.
+3. **Ngspice dual-backend scaffold** (`src/sim/`): platform-agnostic
+   `SpiceSimulator` interface with native (libngspice) and web
+   (JavaScriptBridge) impls. v0 ingress via mutex-guarded sample queue;
+   SAB-backed ring buffer later.
+4. **Parser wrapper around xschem2spice** (`src/scene/schematic_loader.*`)
+   + smoke test + `parser-test` CI job. **Verified end-to-end** against
+   button_test and 3bit_counter examples.
+
+### Next clear targets (in rough priority)
+- **Verify pages.yml runs green in CI**. The `~/.local/share/godot/export_templates/4.3.stable/` path and the `.tpz` extraction layout are educated guesses; first run will say if they're right.
+- **Get libngspice actually linked on native**. The hard part is the build, not the integration — once `sharedspice.h` is on the include path and `-lngspice` resolves, `SPICE3D_HAVE_LIBNGSPICE` flips on and the existing scaffold runs unchanged.
+- **Build the ngspice WASM module**. `spice3d_notes/references/ngspice_example/Dockerfile` is the reference. Output goes alongside `project/web/ngspice_worker.js`; `pages.yml` already stages those files.
+- **Extend xschem2spice to retain L/B/P/A/T drawing primitives** so the renderer can draw actual transistor bodies, not just bounding boxes. User owns the repo; cleanest place to add this.
+- **Schematic→Godot scene generator**. With the loader returning components+pins+wires, write a `SchematicView` Godot scene that drops Line3D / MeshInstance3D nodes for each wire and a CSGBox3D per component. Sky's the limit from there.
+
+### Risks / things that may bite on first CI run
+- `godot_cpp/classes/java_script_bridge.hpp` may not exist verbatim in
+  godot-cpp 4.3 — header naming convention is `snake_case` from the
+  underlying class, but Godot has historically renamed JavaScriptBridge
+  back and forth. If the web build fails to find the header, swap
+  conditionally to whatever name godot-cpp generates.
+- xschem2spice depends on `unistd.h` indirectly (libgen.h). On Emscripten
+  this should be fine; on MSVC, the project doesn't ship POSIX libgen.
+  Native Windows builds will need a polyfill or to drop those calls. Not
+  a concern for CI's ubuntu-22.04 + emscripten paths.
+- `parser-test` clones `sifferman/spice3d_notes` from CI — that repo must
+  be public or the workflow needs a PAT.
+
+---
+
 ## 2026-05-22 — xschem parser via xschem2spice
 
 ### Decision: don't reimplement, reuse
