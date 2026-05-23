@@ -1,8 +1,14 @@
 #include "spice3d_node.h"
 
+#include "godot_cpp/classes/box_mesh.hpp"
+#include "godot_cpp/classes/mesh_instance3d.hpp"
+#include "godot_cpp/classes/standard_material3d.hpp"
 #include "godot_cpp/core/class_db.hpp"
 #include "godot_cpp/variant/array.hpp"
+#include "godot_cpp/variant/color.hpp"
 #include "godot_cpp/variant/utility_functions.hpp"
+#include "godot_cpp/variant/vector2.hpp"
+#include "godot_cpp/variant/vector3.hpp"
 
 #include "scene/schematic_loader.h"
 #include "sim/spice_simulator.h"
@@ -90,6 +96,88 @@ std::string godot_string_to_std_string(const godot::String &godot_text) {
 	return std::string(godot_text.utf8().get_data());
 }
 
+constexpr double WIRE_THICKNESS_IN_WORLD_UNITS = 4.0;
+constexpr double COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS = 60.0;
+
+godot::Vector3 schematic_xy_to_godot_world_position_with_y_flipped(double schematic_x, double schematic_y) {
+	const double godot_y_pointing_up = -schematic_y;
+	return godot::Vector3(schematic_x, godot_y_pointing_up, 0.0);
+}
+
+godot::Ref<godot::StandardMaterial3D> build_wire_render_material() {
+	godot::Ref<godot::StandardMaterial3D> wire_material;
+	wire_material.instantiate();
+	wire_material->set_albedo(godot::Color(0.75f, 0.8f, 0.95f));
+	wire_material->set_feature(godot::BaseMaterial3D::FEATURE_EMISSION, true);
+	wire_material->set_emission(godot::Color(0.2f, 0.25f, 0.5f));
+	return wire_material;
+}
+
+godot::Ref<godot::StandardMaterial3D> build_component_render_material() {
+	godot::Ref<godot::StandardMaterial3D> component_material;
+	component_material.instantiate();
+	component_material->set_albedo(godot::Color(0.85f, 0.55f, 0.25f));
+	component_material->set_metallic(0.2f);
+	component_material->set_roughness(0.55f);
+	return component_material;
+}
+
+void add_wire_segment_mesh_to_parent_node(
+		godot::Node3D *parent_node,
+		const WireSegment &wire,
+		const godot::Ref<godot::Material> &wire_material) {
+	const godot::Vector2 start_in_schematic_space(wire.start_x, wire.start_y);
+	const godot::Vector2 end_in_schematic_space(wire.end_x, wire.end_y);
+	const godot::Vector2 midpoint_in_schematic_space = (start_in_schematic_space + end_in_schematic_space) * 0.5;
+	const double segment_length = start_in_schematic_space.distance_to(end_in_schematic_space);
+	const double segment_angle_radians = (end_in_schematic_space - start_in_schematic_space).angle();
+
+	godot::Ref<godot::BoxMesh> wire_box_mesh;
+	wire_box_mesh.instantiate();
+	wire_box_mesh->set_size(godot::Vector3(
+			segment_length, WIRE_THICKNESS_IN_WORLD_UNITS, WIRE_THICKNESS_IN_WORLD_UNITS));
+
+	godot::MeshInstance3D *wire_mesh_instance = memnew(godot::MeshInstance3D);
+	wire_mesh_instance->set_mesh(wire_box_mesh);
+	wire_mesh_instance->set_material_override(wire_material);
+	wire_mesh_instance->set_position(
+			schematic_xy_to_godot_world_position_with_y_flipped(midpoint_in_schematic_space.x, midpoint_in_schematic_space.y));
+	wire_mesh_instance->set_rotation(godot::Vector3(0.0, 0.0, -segment_angle_radians));
+	parent_node->add_child(wire_mesh_instance);
+}
+
+void add_component_placeholder_mesh_to_parent_node(
+		godot::Node3D *parent_node,
+		const ComponentInstance &component,
+		const godot::Ref<godot::Material> &component_material) {
+	godot::Ref<godot::BoxMesh> placeholder_box_mesh;
+	placeholder_box_mesh.instantiate();
+	placeholder_box_mesh->set_size(
+			godot::Vector3(COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS,
+					COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS,
+					COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS));
+
+	godot::MeshInstance3D *component_mesh_instance = memnew(godot::MeshInstance3D);
+	component_mesh_instance->set_mesh(placeholder_box_mesh);
+	component_mesh_instance->set_material_override(component_material);
+	component_mesh_instance->set_position(
+			schematic_xy_to_godot_world_position_with_y_flipped(component.placement_x, component.placement_y));
+	parent_node->add_child(component_mesh_instance);
+}
+
+void add_rendered_meshes_for_schematic_to_parent_node(
+		godot::Node3D *parent_node,
+		const Schematic &loaded_schematic) {
+	godot::Ref<godot::Material> wire_material = build_wire_render_material();
+	for (const auto &one_wire : loaded_schematic.wires) {
+		add_wire_segment_mesh_to_parent_node(parent_node, one_wire, wire_material);
+	}
+	godot::Ref<godot::Material> component_material = build_component_render_material();
+	for (const auto &one_component : loaded_schematic.component_instances) {
+		add_component_placeholder_mesh_to_parent_node(parent_node, one_component, component_material);
+	}
+}
+
 } // namespace
 
 void Spice3DNode::_bind_methods() {
@@ -105,6 +193,12 @@ void Spice3DNode::_bind_methods() {
 	godot::ClassDB::bind_method(
 			godot::D_METHOD("load_schematic_into_dictionary", "schematic_file_path", "xschemrc_file_path"),
 			&Spice3DNode::load_schematic_into_dictionary);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("load_schematic_and_render_into_node3d",
+					"parent_node_for_rendered_meshes",
+					"schematic_file_path",
+					"xschemrc_file_path"),
+			&Spice3DNode::load_schematic_and_render_into_node3d);
 }
 
 Spice3DNode::Spice3DNode() = default;
@@ -143,6 +237,23 @@ godot::Dictionary Spice3DNode::load_schematic_into_dictionary(
 	const SchematicLoadResult load_result = load_schematic_from_file(
 			schematic_file_path_utf8,
 			xschemrc_file_path_utf8);
+	return build_schematic_dictionary_from_result(load_result);
+}
+
+godot::Dictionary Spice3DNode::load_schematic_and_render_into_node3d(
+		godot::Node3D *parent_node_for_rendered_meshes,
+		const godot::String &schematic_file_path,
+		const godot::String &xschemrc_file_path) {
+	const std::string schematic_file_path_utf8 = godot_string_to_std_string(schematic_file_path);
+	const std::string xschemrc_file_path_utf8 = godot_string_to_std_string(xschemrc_file_path);
+	const SchematicLoadResult load_result = load_schematic_from_file(
+			schematic_file_path_utf8,
+			xschemrc_file_path_utf8);
+	if (load_result.was_successful && parent_node_for_rendered_meshes != nullptr) {
+		add_rendered_meshes_for_schematic_to_parent_node(
+				parent_node_for_rendered_meshes,
+				load_result.loaded_schematic);
+	}
 	return build_schematic_dictionary_from_result(load_result);
 }
 
