@@ -10,6 +10,12 @@ config_version=5
 
 [application]
 
-config/name="godot cpp template"
-config/features=PackedStringArray("4.1", "Forward Plus")
+config/name="spice3d"
+config/description="Real-time interactive SPICE circuit simulator in 3D."
+config/features=PackedStringArray("4.3", "Forward Plus")
 config/icon="res://icon.svg"
+run/main_scene="res://main.tscn"
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
