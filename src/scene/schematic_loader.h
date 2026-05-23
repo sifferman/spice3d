@@ -33,11 +33,13 @@ struct DrawingBox {
 	double y1 = 0.0;
 	double x2 = 0.0;
 	double y2 = 0.0;
+	bool filled = false;
 };
 
 struct DrawingPolygon {
 	std::vector<double> vertex_xs;
 	std::vector<double> vertex_ys;
+	bool filled = false;
 };
 
 struct DrawingArc {

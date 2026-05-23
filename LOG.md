@@ -5,6 +5,42 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — Filled polygons + smooth-tube arcs
+
+Two follow-ups after the user looked at the deployed render:
+
+### Filled polygons
+
+xschem polygons with `fill=true` (mosfet body-source arrowheads,
+diode triangle, ipin/opin pin arrows, etc.) now render filled.
+`xschem2spice` now stores `filled` on `xs_polygon` and `xs_box`,
+populated by `xs_prop_get(props, "fill")`. The C++ side mirrors
+both flags on `DrawingPolygon` and `DrawingBox`.
+
+For the actual fill mesh we triangulate with
+`Geometry2D::triangulate_polygon` (handles concave shapes like the
+ipin arrow — fan triangulation would tear). Output is an
+`ArrayMesh` with `PRIMITIVE_TRIANGLES`, vertices lying flat at
+world y=0. We strip the trailing closing vertex (`vertex[0] == vertex[N-1]`)
+since xschem polygons typically self-close in the source. Fill
+material disables backface culling so the polygon is visible from
+both above and below.
+
+The capsule outline is still drawn on top of the fill — keeps the
+silhouette crisp.
+
+### Arcs as cylinders, not capsules
+
+Capsules ended each tessellation segment with a hemispherical cap.
+At low segment counts (or tight radii like the mosfet body circles)
+those caps stacked up as visible "beads" along the arc. Switched
+arc segments to `CylinderMesh` (no hemispheres) so adjacent
+segments share endpoints and the curve looks continuous. Lines,
+box outlines, and polygon outlines keep their capsules — those
+benefit from the rounded ends.
+
+---
+
 ## 2026-05-23 — All five drawing records rendered with rounded capsules
 
 L, B, P, A, and T records (lines, boxes, polygons, arcs, and text

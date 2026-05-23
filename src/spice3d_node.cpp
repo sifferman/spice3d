@@ -1,14 +1,21 @@
 #include "spice3d_node.h"
 
+#include "godot_cpp/classes/array_mesh.hpp"
 #include "godot_cpp/classes/box_mesh.hpp"
 #include "godot_cpp/classes/capsule_mesh.hpp"
+#include "godot_cpp/classes/cylinder_mesh.hpp"
+#include "godot_cpp/classes/geometry2d.hpp"
 #include "godot_cpp/classes/label3d.hpp"
+#include "godot_cpp/classes/mesh.hpp"
 #include "godot_cpp/classes/mesh_instance3d.hpp"
 #include "godot_cpp/classes/standard_material3d.hpp"
 #include "godot_cpp/core/class_db.hpp"
 #include "godot_cpp/variant/array.hpp"
 #include "godot_cpp/variant/basis.hpp"
 #include "godot_cpp/variant/color.hpp"
+#include "godot_cpp/variant/packed_int32_array.hpp"
+#include "godot_cpp/variant/packed_vector2_array.hpp"
+#include "godot_cpp/variant/packed_vector3_array.hpp"
 #include "godot_cpp/variant/transform3d.hpp"
 #include "godot_cpp/variant/utility_functions.hpp"
 #include "godot_cpp/variant/vector2.hpp"
@@ -113,7 +120,7 @@ std::string godot_string_to_std_string(const godot::String &godot_text) {
 constexpr double WIRE_STROKE_RADIUS_IN_WORLD_UNITS = 2.0;
 constexpr double DRAWING_OUTLINE_STROKE_RADIUS_IN_WORLD_UNITS = 1.0;
 constexpr double COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS = 60.0;
-constexpr double ARC_TESSELLATION_DEGREES_PER_CAPSULE_SEGMENT = 6.0;
+constexpr double ARC_TESSELLATION_DEGREES_PER_CYLINDER_SEGMENT = 6.0;
 constexpr double TEXT_PIXEL_SIZE_PER_XSCHEM_VERTICAL_SIZE_FACTOR = 0.25;
 
 godot::Vector3 schematic_xy_to_lying_flat_world_position(double schematic_x, double schematic_y) {
@@ -215,6 +222,40 @@ void add_capsule_segment_between_two_schematic_points(
 	parent_node->add_child(capsule_mesh_instance);
 }
 
+godot::Ref<godot::CylinderMesh> build_cylinder_mesh_with_radius_and_total_height(
+		double cylinder_radius, double total_height) {
+	godot::Ref<godot::CylinderMesh> cylinder_mesh;
+	cylinder_mesh.instantiate();
+	cylinder_mesh->set_top_radius(cylinder_radius);
+	cylinder_mesh->set_bottom_radius(cylinder_radius);
+	cylinder_mesh->set_height(total_height);
+	return cylinder_mesh;
+}
+
+void add_cylinder_segment_between_two_schematic_points(
+		godot::Node3D *parent_node,
+		double start_schematic_x, double start_schematic_y,
+		double end_schematic_x, double end_schematic_y,
+		double cylinder_stroke_radius,
+		const godot::Ref<godot::Material> &cylinder_material) {
+	const godot::Vector3 start_world_point = schematic_xy_to_lying_flat_world_position(start_schematic_x, start_schematic_y);
+	const godot::Vector3 end_world_point = schematic_xy_to_lying_flat_world_position(end_schematic_x, end_schematic_y);
+	const godot::Vector3 segment_direction_in_world = end_world_point - start_world_point;
+	const double segment_length_in_world = segment_direction_in_world.length();
+	if (segment_length_in_world <= 0.0) return;
+
+	godot::MeshInstance3D *cylinder_mesh_instance = memnew(godot::MeshInstance3D);
+	cylinder_mesh_instance->set_mesh(build_cylinder_mesh_with_radius_and_total_height(
+			cylinder_stroke_radius, segment_length_in_world));
+	cylinder_mesh_instance->set_material_override(cylinder_material);
+
+	godot::Transform3D cylinder_transform;
+	cylinder_transform.basis = basis_aligning_local_y_axis_with_xz_plane_direction(segment_direction_in_world);
+	cylinder_transform.origin = (start_world_point + end_world_point) * 0.5;
+	cylinder_mesh_instance->set_transform(cylinder_transform);
+	parent_node->add_child(cylinder_mesh_instance);
+}
+
 void add_wire_segment_capsule_to_parent_node(
 		godot::Node3D *parent_node,
 		const WireSegment &wire,
@@ -291,14 +332,74 @@ void add_drawing_polygon_outline_in_global_coordinates(
 	}
 }
 
-void add_drawing_arc_tessellated_capsules_in_global_coordinates(
+size_t polygon_vertex_count_with_repeated_closing_vertex_stripped(const DrawingPolygon &polygon) {
+	const size_t paired_count = std::min(polygon.vertex_xs.size(), polygon.vertex_ys.size());
+	if (paired_count >= 2
+			&& polygon.vertex_xs[0] == polygon.vertex_xs[paired_count - 1]
+			&& polygon.vertex_ys[0] == polygon.vertex_ys[paired_count - 1]) {
+		return paired_count - 1;
+	}
+	return paired_count;
+}
+
+void add_drawing_polygon_filled_mesh_in_global_coordinates(
+		godot::Node3D *parent_node,
+		const DrawingPolygon &polygon,
+		const godot::Ref<godot::Material> &fill_material) {
+	const size_t unique_vertex_count = polygon_vertex_count_with_repeated_closing_vertex_stripped(polygon);
+	if (unique_vertex_count < 3) return;
+
+	godot::PackedVector2Array vertices_for_triangulation;
+	vertices_for_triangulation.resize(static_cast<int>(unique_vertex_count));
+	for (size_t i = 0; i < unique_vertex_count; ++i) {
+		vertices_for_triangulation[static_cast<int>(i)] =
+				godot::Vector2(polygon.vertex_xs[i], polygon.vertex_ys[i]);
+	}
+	const godot::PackedInt32Array triangle_indices =
+			godot::Geometry2D::get_singleton()->triangulate_polygon(vertices_for_triangulation);
+	if (triangle_indices.is_empty()) return;
+
+	godot::PackedVector3Array vertices_in_world;
+	vertices_in_world.resize(static_cast<int>(unique_vertex_count));
+	for (size_t i = 0; i < unique_vertex_count; ++i) {
+		vertices_in_world[static_cast<int>(i)] = schematic_xy_to_lying_flat_world_position(
+				polygon.vertex_xs[i], polygon.vertex_ys[i]);
+	}
+
+	godot::Array surface_arrays;
+	surface_arrays.resize(godot::Mesh::ARRAY_MAX);
+	surface_arrays[godot::Mesh::ARRAY_VERTEX] = vertices_in_world;
+	surface_arrays[godot::Mesh::ARRAY_INDEX] = triangle_indices;
+
+	godot::Ref<godot::ArrayMesh> filled_polygon_mesh;
+	filled_polygon_mesh.instantiate();
+	filled_polygon_mesh->add_surface_from_arrays(godot::Mesh::PRIMITIVE_TRIANGLES, surface_arrays);
+
+	godot::MeshInstance3D *filled_mesh_instance = memnew(godot::MeshInstance3D);
+	filled_mesh_instance->set_mesh(filled_polygon_mesh);
+	filled_mesh_instance->set_material_override(fill_material);
+	parent_node->add_child(filled_mesh_instance);
+}
+
+void add_drawing_polygon_in_global_coordinates(
+		godot::Node3D *parent_node,
+		const DrawingPolygon &polygon,
+		const godot::Ref<godot::Material> &outline_material,
+		const godot::Ref<godot::Material> &fill_material) {
+	if (polygon.filled) {
+		add_drawing_polygon_filled_mesh_in_global_coordinates(parent_node, polygon, fill_material);
+	}
+	add_drawing_polygon_outline_in_global_coordinates(parent_node, polygon, outline_material);
+}
+
+void add_drawing_arc_tessellated_cylinders_in_global_coordinates(
 		godot::Node3D *parent_node,
 		const DrawingArc &arc,
 		const godot::Ref<godot::Material> &outline_material) {
 	if (arc.radius <= 0.0 || arc.sweep_angle_degrees == 0.0) return;
 	const int tessellation_segment_count = std::max(3,
 			static_cast<int>(std::ceil(
-					std::abs(arc.sweep_angle_degrees) / ARC_TESSELLATION_DEGREES_PER_CAPSULE_SEGMENT)));
+					std::abs(arc.sweep_angle_degrees) / ARC_TESSELLATION_DEGREES_PER_CYLINDER_SEGMENT)));
 	const double start_angle_radians = arc.start_angle_degrees * Math_PI / 180.0;
 	const double sweep_angle_radians = arc.sweep_angle_degrees * Math_PI / 180.0;
 	double previous_x = arc.center_x + arc.radius * std::cos(start_angle_radians);
@@ -308,7 +409,7 @@ void add_drawing_arc_tessellated_capsules_in_global_coordinates(
 		const double angle_radians = start_angle_radians + sweep_angle_radians * t;
 		const double current_x = arc.center_x + arc.radius * std::cos(angle_radians);
 		const double current_y = arc.center_y - arc.radius * std::sin(angle_radians);
-		add_capsule_segment_between_two_schematic_points(parent_node,
+		add_cylinder_segment_between_two_schematic_points(parent_node,
 				previous_x, previous_y, current_x, current_y,
 				DRAWING_OUTLINE_STROKE_RADIUS_IN_WORLD_UNITS,
 				outline_material);
@@ -345,6 +446,7 @@ void add_drawing_text_label_in_global_coordinates(
 
 struct DrawingRenderMaterials {
 	godot::Ref<godot::Material> outline;
+	godot::Ref<godot::Material> fill;
 	godot::Color text_color;
 };
 
@@ -359,9 +461,9 @@ void render_drawing_record_in_global_coordinates(
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingBox>) {
 			add_drawing_box_outline_in_global_coordinates(parent_node, concrete_record, render_materials.outline);
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingPolygon>) {
-			add_drawing_polygon_outline_in_global_coordinates(parent_node, concrete_record, render_materials.outline);
+			add_drawing_polygon_in_global_coordinates(parent_node, concrete_record, render_materials.outline, render_materials.fill);
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingArc>) {
-			add_drawing_arc_tessellated_capsules_in_global_coordinates(parent_node, concrete_record, render_materials.outline);
+			add_drawing_arc_tessellated_cylinders_in_global_coordinates(parent_node, concrete_record, render_materials.outline);
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingText>) {
 			add_drawing_text_label_in_global_coordinates(parent_node, concrete_record, render_materials.text_color);
 		}
@@ -395,6 +497,7 @@ DrawingRecord transform_symbol_local_drawing_record_to_schematic_global(
 			DrawingBox global_box;
 			global_box.x1 = p1.first;  global_box.y1 = p1.second;
 			global_box.x2 = p2.first;  global_box.y2 = p2.second;
+			global_box.filled = concrete_record.filled;
 			return global_box;
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingPolygon>) {
 			DrawingPolygon global_polygon;
@@ -407,6 +510,7 @@ DrawingRecord transform_symbol_local_drawing_record_to_schematic_global(
 				global_polygon.vertex_xs.push_back(p.first);
 				global_polygon.vertex_ys.push_back(p.second);
 			}
+			global_polygon.filled = concrete_record.filled;
 			return global_polygon;
 		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingArc>) {
 			const auto center = transform_symbol_local_point_via_component(
@@ -436,9 +540,20 @@ DrawingRecord transform_symbol_local_drawing_record_to_schematic_global(
 	}, symbol_local_record);
 }
 
+godot::Ref<godot::StandardMaterial3D> build_drawing_fill_material() {
+	godot::Ref<godot::StandardMaterial3D> fill_material;
+	fill_material.instantiate();
+	fill_material->set_albedo(godot::Color(0.95f, 0.85f, 0.4f));
+	fill_material->set_metallic(0.1f);
+	fill_material->set_roughness(0.55f);
+	fill_material->set_cull_mode(godot::BaseMaterial3D::CULL_DISABLED);
+	return fill_material;
+}
+
 DrawingRenderMaterials build_drawing_render_materials() {
 	DrawingRenderMaterials materials;
 	materials.outline = build_drawing_outline_material();
+	materials.fill = build_drawing_fill_material();
 	materials.text_color = godot::Color(0.95f, 0.92f, 0.85f);
 	return materials;
 }

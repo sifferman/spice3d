@@ -63,6 +63,7 @@ DrawingRecord drawing_record_from_xschem_record(const xs_drawing_record &xschem_
 			box.y1 = xschem_record.data.box.y1;
 			box.x2 = xschem_record.data.box.x2;
 			box.y2 = xschem_record.data.box.y2;
+			box.filled = xschem_record.data.box.filled != 0;
 			return box;
 		}
 		case 'P': {
@@ -74,6 +75,7 @@ DrawingRecord drawing_record_from_xschem_record(const xs_drawing_record &xschem_
 			polygon.vertex_ys.assign(
 					xschem_record.data.polygon.vertex_ys,
 					xschem_record.data.polygon.vertex_ys + vertex_count);
+			polygon.filled = xschem_record.data.polygon.filled != 0;
 			return polygon;
 		}
 		case 'A': {
