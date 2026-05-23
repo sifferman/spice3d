@@ -5,6 +5,126 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — Fetching xschem stdlib + sky130 PDK at startup; CORS strategy
+
+End-to-end, the deployed site now fetches the xschem device-symbol
+library and the sky130 PDK on first load, caches both in IndexedDB
+(via `user://`), and renders the bundled `button_test.sch` against
+those caches. Cold start ~6 seconds; subsequent loads are instant
+cache hits.
+
+### What's CORS-clean and what isn't
+
+The browser fetch path forced specific choices because GitHub's
+infrastructure isn't uniformly CORS-friendly:
+
+| Endpoint | CORS? | Used for |
+|---|---|---|
+| `raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>` | ✅ `*` | nothing currently |
+| `cdn.jsdelivr.net/gh/<owner>/<repo>@<sha>/<path>` (repo content) | ✅ `*` | xschem `.sym` files (per-file) |
+| `data.jsdelivr.com/v1/packages/gh/...` (file listing) | ✅ `*` | xschem repo file listing |
+| `api.github.com/repos/.../releases/tags/<tag>` | ✅ `*` | sky130 ciel release metadata + SHA-256 digests |
+| `github.com/<owner>/<repo>/archive/<sha>.zip` | ❌ | — |
+| `github.com/<owner>/<repo>/releases/download/<tag>/<file>` | ❌ | — (needs proxy) |
+| `release-assets.githubusercontent.com/...` (redirect target) | ❌ | — |
+| `www-archive.fossi-foundation.org/ciel-releases/.../manifest.json` (final URL) | ✅ `*` | ciel version manifest (note: `fossi-foundation.github.io` redirects here via HTTP — hit the final HTTPS URL directly to avoid mixed-content) |
+
+GitHub has declined CORS on Releases downloads for over a decade
+— "release downloads are an authenticated user action, not a
+programmable web resource." Won't change soon.
+
+### Xschem stdlib — jsDelivr per-file, in parallel
+
+`main.gd` fetches the device-symbol listing from
+`data.jsdelivr.com/v1/packages/gh/StefanSchippers/xschem@<sha>?structure=flat`,
+filters to `*/xschem_library/devices/*.sym` (~125 files), then
+issues all 125 `HTTPRequest`s in parallel via `cdn.jsdelivr.net`.
+A small ref-counted barrier (`AllParallelHttpRequestsFinishedSignalEmitter`)
+awaits the last one. Total wall time on the test deploy: ~3.5 s
+cold, instant warm. Cache layout:
+
+  user://xschem_stdlib/<xschem-sha>/devices/*.sym
+  user://xschem_stdlib/<xschem-sha>/.fetch_complete
+
+The directory is passed as an `extra_symbol_search_directories`
+entry to `Spice3DNode.load_schematic_and_render_into_node3d` so
+the schematic loader's library path picks it up without copying
+files into each schematic's staging directory.
+
+### sky130 PDK — Cloudflare Worker proxy + SHA-256 verify
+
+ciel's release archives are GitHub Release assets, which have no
+CORS — and jsDelivr only mirrors repo content, not releases. The
+ciel project itself can't fix this because the asset CDN is
+controlled by GitHub, not them. Public CORS proxies in 2026 are
+all dead or gated (corsproxy.io rejects deployed origins,
+cors.sh doesn't answer, allorigins.win is 522, etc.).
+
+Solution: a tiny Cloudflare Worker in `infra/cors-proxy/` that
+fronts ciel-releases asset URLs with `Access-Control-Allow-Origin: *`.
+Allowlisted to URLs starting with
+`https://github.com/fossi-foundation/ciel-releases/releases/download/`
+so it can't be used as a generic CORS bypass. Free tier (100k
+req/day, no credit card) is far more than we need — first-load
+fetches once, cache hits forever. Live at
+`https://ciel-cors-proxy.sifferman.workers.dev`.
+
+The Worker is *untrusted by design*. Trust comes from the
+SHA-256 digest field on the GitHub release API response (which
+is CORS-clean and authoritative). Flow:
+
+  1. GET `api.github.com/.../releases/tags/sky130-<ciel-version>`
+     -> assets[].{name, browser_download_url, digest: "sha256:..."}
+  2. For each archive we want, GET via the Worker proxy.
+  3. Hash the response with `HashingContext.HASH_SHA256`.
+  4. Compare to the digest from step 1. Mismatch -> abort, no
+     extraction, no cache update.
+  5. Hand verified bytes to C++
+     `Spice3DNode.extract_zstd_tar_archive_filtered_by_path_substring`
+     with `["/libs.tech/combined/", "/libs.tech/xschem/"]` as the
+     keep-substrings — zstd-decompress + USTAR-parse + filter +
+     write in one C++ call, ~700 ms for the 17 MB decompressed.
+
+For now we fetch only `common.tar.zst` (6.5 MB), which contains
+both `sky130A` and `sky130B` variants' `libs.tech/{combined,xschem}`
+subtrees — 2325 files after filtering, ~18 MB on disk. The
+per-library archives (sky130_fd_pr, sky130_fd_sc_hd, …) total
+~3 GB and are 99% layout/GDS data we don't want. Skip them for
+now; lazy-fetch later if/when a schematic references a cell from
+a library that isn't in `common`.
+
+Cache layout:
+
+  user://sky130/<ciel-version>/sky130A/libs.tech/{combined,xschem}/...
+  user://sky130/<ciel-version>/sky130B/libs.tech/{combined,xschem}/...
+  user://sky130/<ciel-version>/.fetch_complete
+
+Both `sky130A/libs.tech/xschem` and `sky130B/libs.tech/xschem` are
+passed as extra symbol search directories.
+
+### When the upstream pins move
+
+- xschem upstream SHA: const in `main.gd`. Bump by editing
+  `XSCHEM_UPSTREAM_GIT_SHA`. Cache path includes the SHA so the
+  on-disk cache busts automatically.
+- sky130 ciel version: const in `main.gd` (currently
+  `SKY130_CIEL_VERSION`). Same cache-busting behavior. The next
+  step is auto-picking the latest non-pre-release from the ciel
+  manifest at startup; tracked separately.
+- Worker code: under `infra/cors-proxy/`. Redeploy with
+  `wrangler deploy` from that directory.
+
+### IndexedDB persistence
+
+Godot's `user://` on web is IDBFS-backed (i.e., IndexedDB under
+the hood). `navigator.storage.persist()` is requested via
+`JavaScriptBridge` at startup to ask the browser not to evict
+under storage pressure. The two caches above survive page
+reloads, tab close+reopen, and (with the persist hint) browser
+storage cleanup heuristics.
+
+---
+
 ## 2026-05-23 — Pin engine + godot-cpp to 4.4.1 (godot#111645)
 
 Godot 4.5 introduced a race in the editor's documentation generator
