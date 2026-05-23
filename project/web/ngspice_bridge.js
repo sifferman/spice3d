@@ -18,8 +18,20 @@
 			if (this.ngspiceWorker) {
 				return true;
 			}
-			console.warn('[spice3d] ngspice worker not yet implemented');
-			return false;
+			try {
+				this.ngspiceWorker = new Worker('ngspice_worker.js');
+			} catch (workerConstructionError) {
+				console.error('[spice3d] failed to construct ngspice worker', workerConstructionError);
+				this.ngspiceWorker = null;
+				return false;
+			}
+			this.ngspiceWorker.addEventListener('message', (workerMessageEvent) => {
+				this.handleWorkerMessage(workerMessageEvent.data || {});
+			});
+			this.ngspiceWorker.addEventListener('error', (workerErrorEvent) => {
+				console.error('[spice3d] ngspice worker error', workerErrorEvent.message);
+			});
+			return true;
 		},
 
 		loadNetlistLines: function loadNetlistLines(netlistLines) {
@@ -72,6 +84,27 @@
 			switch (workerMessage.messageKind) {
 				case 'workerReady':
 					this.isWorkerReady = true;
+					if (!workerMessage.isPlaceholder) {
+						console.log('[spice3d] ngspice worker ready');
+					}
+					break;
+				case 'ngspiceSmokeTestRan':
+					console.log('[spice3d] ngspice smoke test exit=' + workerMessage.exitStatus);
+					if (workerMessage.stdoutText) {
+						console.log('[spice3d] ngspice smoke test stdout:\n' + workerMessage.stdoutText);
+					}
+					if (workerMessage.stderrText) {
+						console.warn('[spice3d] ngspice smoke test stderr:\n' + workerMessage.stderrText);
+					}
+					break;
+				case 'simulationOutputText':
+					console.log('[spice3d] simulation output exit=' + workerMessage.exitStatus);
+					if (workerMessage.stdoutText) {
+						console.log('[spice3d] simulation stdout:\n' + workerMessage.stdoutText);
+					}
+					if (workerMessage.stderrText) {
+						console.warn('[spice3d] simulation stderr:\n' + workerMessage.stderrText);
+					}
 					break;
 				case 'nodeNames':
 					this.nodeNames = workerMessage.nodeNames;
@@ -82,9 +115,13 @@
 				case 'runningStateChanged':
 					this.isSimulationRunning = Boolean(workerMessage.isSimulationRunning);
 					break;
+				case 'error':
+					console.error('[spice3d] ngspice worker reported error: ' + workerMessage.errorText);
+					break;
 			}
 		},
 	};
 
 	globalThis.spice3d = bridge;
+	bridge.initializeWorker();
 })();
