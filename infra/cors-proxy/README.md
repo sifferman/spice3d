@@ -14,14 +14,29 @@ https://github.com/fossi-foundation/ciel-releases/releases/download/
 
 so it cannot be used as a generic CORS bypass.
 
-## Deploying
+## Live deployment used by this repo's GitHub Pages site
+
+```
+https://ciel-cors-proxy.sifferman.workers.dev/?url=<url-encoded-upstream-url>
+```
+
+`main.gd` points at that URL directly. If you fork this repo and want
+your own deploy, replace `SKY130_CORS_PROXY_URL_PREFIX` in
+`project/main.gd` with the URL of your own deployment of this worker.
+
+## Deploying your own copy
 
 ```bash
 cd infra/cors-proxy
 wrangler deploy
 ```
 
-The deployed URL is `https://ciel-cors-proxy.<your-cf-subdomain>.workers.dev`.
+The Worker name (`ciel-cors-proxy`) plus your Cloudflare account's
+`workers.dev` subdomain together form the URL:
+
+```
+https://ciel-cors-proxy.<your-cf-subdomain>.workers.dev
+```
 
 ## Usage
 

@@ -18,16 +18,32 @@ const XSCHEM_LOCAL_DEVICES_DIRECTORY := XSCHEM_LOCAL_CACHE_ROOT + "/devices"
 const XSCHEM_LOCAL_CACHE_COMPLETE_MARKER := XSCHEM_LOCAL_CACHE_ROOT + "/.fetch_complete"
 const XSCHEM_DEVICES_PATH_FRAGMENT_INSIDE_REPO := "/xschem_library/devices/"
 
+const SKY130_CIEL_VERSION := "74c0e6b118a67d94c24172143d3bd597473fa63d"
+const SKY130_CIEL_RELEASE_TAG := "sky130-" + SKY130_CIEL_VERSION
+const SKY130_GITHUB_RELEASE_API_URL := \
+		"https://api.github.com/repos/fossi-foundation/ciel-releases/releases/tags/" + SKY130_CIEL_RELEASE_TAG
+const SKY130_CORS_PROXY_URL_PREFIX := "https://ciel-cors-proxy.sifferman.workers.dev/?url="
+const SKY130_ARCHIVE_FILENAMES_TO_FETCH_AT_STARTUP := ["common.tar.zst"]
+const SKY130_LOCAL_CACHE_ROOT := "user://sky130/" + SKY130_CIEL_VERSION
+const SKY130_LOCAL_CACHE_COMPLETE_MARKER := SKY130_LOCAL_CACHE_ROOT + "/.fetch_complete"
+const SKY130_PATH_SUBSTRINGS_TO_KEEP_DURING_EXTRACTION := [
+	"/libs.tech/combined/",
+	"/libs.tech/xschem/",
+]
+
 
 func _ready() -> void:
 	request_persistent_browser_storage_on_web()
-	stage_bundled_schematic_files_to_writable_directory()
-	await ensure_xschem_devices_library_is_cached()
 	var spice3d_root_node := Spice3DNode.new()
 	add_child(spice3d_root_node)
+	stage_bundled_schematic_files_to_writable_directory()
+	await ensure_xschem_devices_library_is_cached()
+	await ensure_sky130_pdk_is_cached_using_extractor_node(spice3d_root_node)
 	var staged_top_schematic_absolute_path := absolute_path_for_staged_schematic_file(TOP_SCHEMATIC_FILE_NAME)
 	var extra_symbol_search_directories := PackedStringArray([
 		absolute_path_for_xschem_devices_library_directory(),
+		absolute_path_for_sky130_xschem_library_directory_for_sky130a_variant(),
+		absolute_path_for_sky130_xschem_library_directory_for_sky130b_variant(),
 	])
 	var loaded_schematic := spice3d_root_node.load_schematic_and_render_into_node3d(
 			schematic_view,
@@ -75,7 +91,7 @@ func ensure_xschem_devices_library_is_cached() -> void:
 	if successfully_fetched_file_count != device_symbol_repo_paths.size():
 		push_error("xschem device-symbol fetch was incomplete; not writing cache-complete marker")
 		return
-	write_cache_complete_marker_for_xschem_devices()
+	write_cache_complete_marker_at_path(XSCHEM_LOCAL_CACHE_COMPLETE_MARKER)
 
 
 func fetch_xschem_device_symbol_paths_via_jsdelivr_listing() -> Array:
@@ -170,8 +186,115 @@ func decrement_pending_request_count_and_emit_when_done(
 		all_requests_finished_signal_emitter.all_finished.emit()
 
 
-func write_cache_complete_marker_for_xschem_devices() -> void:
-	var marker_file := FileAccess.open(XSCHEM_LOCAL_CACHE_COMPLETE_MARKER, FileAccess.WRITE)
+func ensure_sky130_pdk_is_cached_using_extractor_node(spice3d_root_node: Node) -> void:
+	if FileAccess.file_exists(SKY130_LOCAL_CACHE_COMPLETE_MARKER):
+		print("[spice3d] sky130 PDK cache HIT (version=%s)" % SKY130_CIEL_VERSION)
+		return
+	print("[spice3d] sky130 PDK cache MISS, fetching release metadata from GitHub API...")
+	DirAccess.make_dir_recursive_absolute(SKY130_LOCAL_CACHE_ROOT)
+	var release_metadata := await fetch_sky130_release_metadata_from_github_api()
+	if release_metadata.is_empty() or not release_metadata.has("assets"):
+		push_error("sky130 release metadata fetch returned no assets")
+		return
+	var expected_sha256_hex_by_archive_filename := build_expected_sha256_lookup_table(release_metadata)
+	var upstream_download_url_by_archive_filename := build_upstream_download_url_lookup_table(release_metadata)
+	for one_archive_filename in SKY130_ARCHIVE_FILENAMES_TO_FETCH_AT_STARTUP:
+		var was_successfully_extracted := await fetch_verify_and_extract_one_sky130_archive(
+				one_archive_filename,
+				upstream_download_url_by_archive_filename.get(one_archive_filename, ""),
+				expected_sha256_hex_by_archive_filename.get(one_archive_filename, ""),
+				spice3d_root_node)
+		if not was_successfully_extracted:
+			push_error("sky130 archive %s failed; not writing cache-complete marker" % one_archive_filename)
+			return
+	write_cache_complete_marker_at_path(SKY130_LOCAL_CACHE_COMPLETE_MARKER)
+	print("[spice3d] sky130 PDK cache populated (version=%s)" % SKY130_CIEL_VERSION)
+
+
+func fetch_sky130_release_metadata_from_github_api() -> Dictionary:
+	var release_metadata_body := await download_url_as_byte_array(SKY130_GITHUB_RELEASE_API_URL)
+	if release_metadata_body.is_empty():
+		return {}
+	var parsed_release_metadata = JSON.parse_string(release_metadata_body.get_string_from_utf8())
+	if parsed_release_metadata == null or not parsed_release_metadata is Dictionary:
+		push_error("sky130 release metadata did not parse as a JSON dictionary")
+		return {}
+	return parsed_release_metadata
+
+
+func build_expected_sha256_lookup_table(release_metadata: Dictionary) -> Dictionary:
+	var table_by_archive_filename := {}
+	for one_release_asset in release_metadata.assets:
+		var asset_filename: String = one_release_asset.get("name", "")
+		var asset_digest_with_algorithm_prefix: String = one_release_asset.get("digest", "")
+		if asset_filename.is_empty() or asset_digest_with_algorithm_prefix.is_empty():
+			continue
+		table_by_archive_filename[asset_filename] = asset_digest_with_algorithm_prefix.trim_prefix("sha256:")
+	return table_by_archive_filename
+
+
+func build_upstream_download_url_lookup_table(release_metadata: Dictionary) -> Dictionary:
+	var table_by_archive_filename := {}
+	for one_release_asset in release_metadata.assets:
+		var asset_filename: String = one_release_asset.get("name", "")
+		var asset_browser_download_url: String = one_release_asset.get("browser_download_url", "")
+		if asset_filename.is_empty() or asset_browser_download_url.is_empty():
+			continue
+		table_by_archive_filename[asset_filename] = asset_browser_download_url
+	return table_by_archive_filename
+
+
+func fetch_verify_and_extract_one_sky130_archive(
+		archive_filename: String,
+		upstream_github_download_url: String,
+		expected_sha256_hex: String,
+		spice3d_root_node: Node) -> bool:
+	if upstream_github_download_url.is_empty() or expected_sha256_hex.is_empty():
+		push_error("sky130 %s: missing download url or expected digest in release metadata" % archive_filename)
+		return false
+	print("[spice3d] sky130 fetching %s via cors-proxy worker..." % archive_filename)
+	var fetch_start_milliseconds := Time.get_ticks_msec()
+	var proxied_download_url := SKY130_CORS_PROXY_URL_PREFIX + upstream_github_download_url.uri_encode()
+	var archive_bytes := await download_url_as_byte_array(proxied_download_url)
+	if archive_bytes.is_empty():
+		push_error("sky130 %s download failed via cors-proxy worker" % archive_filename)
+		return false
+	var fetch_duration_milliseconds := Time.get_ticks_msec() - fetch_start_milliseconds
+	print("[spice3d] sky130 downloaded %s (%d bytes, %d ms)" % [
+			archive_filename, archive_bytes.size(), fetch_duration_milliseconds])
+	var actual_sha256_hex := compute_sha256_hex_of_byte_array(archive_bytes)
+	if actual_sha256_hex != expected_sha256_hex:
+		push_error("sky130 %s SHA-256 mismatch: expected %s, got %s" % [
+				archive_filename, expected_sha256_hex, actual_sha256_hex])
+		return false
+	print("[spice3d] sky130 %s SHA-256 verified" % archive_filename)
+	var extract_start_milliseconds := Time.get_ticks_msec()
+	var extraction_result: Dictionary = spice3d_root_node.extract_zstd_tar_archive_filtered_by_path_substring(
+			archive_bytes,
+			absolute_path_for_sky130_local_cache_root(),
+			PackedStringArray(SKY130_PATH_SUBSTRINGS_TO_KEEP_DURING_EXTRACTION))
+	if not extraction_result["was_successful"]:
+		push_error("sky130 %s extraction failed: %s" % [
+				archive_filename, str(extraction_result.get("error_message", ""))])
+		return false
+	var extract_duration_milliseconds := Time.get_ticks_msec() - extract_start_milliseconds
+	print("[spice3d] sky130 %s extracted %d files (%d bytes) in %d ms" % [
+			archive_filename,
+			extraction_result["extracted_file_count"],
+			extraction_result["total_bytes_written"],
+			extract_duration_milliseconds])
+	return true
+
+
+func compute_sha256_hex_of_byte_array(input_bytes: PackedByteArray) -> String:
+	var hashing_context := HashingContext.new()
+	hashing_context.start(HashingContext.HASH_SHA256)
+	hashing_context.update(input_bytes)
+	return hashing_context.finish().hex_encode()
+
+
+func write_cache_complete_marker_at_path(marker_absolute_path: String) -> void:
+	var marker_file := FileAccess.open(marker_absolute_path, FileAccess.WRITE)
 	marker_file.store_string("ok\n")
 	marker_file.close()
 
@@ -213,6 +336,18 @@ func absolute_path_for_staged_schematic_file(staged_file_name: String) -> String
 
 func absolute_path_for_xschem_devices_library_directory() -> String:
 	return "%s/xschem_stdlib/%s/devices" % [OS.get_user_data_dir(), XSCHEM_UPSTREAM_GIT_SHA]
+
+
+func absolute_path_for_sky130_local_cache_root() -> String:
+	return "%s/sky130/%s" % [OS.get_user_data_dir(), SKY130_CIEL_VERSION]
+
+
+func absolute_path_for_sky130_xschem_library_directory_for_sky130a_variant() -> String:
+	return absolute_path_for_sky130_local_cache_root() + "/sky130A/libs.tech/xschem"
+
+
+func absolute_path_for_sky130_xschem_library_directory_for_sky130b_variant() -> String:
+	return absolute_path_for_sky130_local_cache_root() + "/sky130B/libs.tech/xschem"
 
 
 func update_status_text(spice3d_root_node: Node, loaded_schematic: Dictionary) -> void:
