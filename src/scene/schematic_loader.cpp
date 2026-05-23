@@ -100,6 +100,20 @@ void append_search_paths_to_library_path(
 	}
 }
 
+std::string directory_portion_of_file_path(const std::string &file_path) {
+	const auto last_path_separator_position = file_path.find_last_of("/\\");
+	if (last_path_separator_position == std::string::npos) return std::string(".");
+	if (last_path_separator_position == 0) return std::string("/");
+	return file_path.substr(0, last_path_separator_position);
+}
+
+void add_schematic_own_directory_to_library_path(
+		const std::string &schematic_file_path,
+		xs_library_path *library_path) {
+	const std::string schematic_directory = directory_portion_of_file_path(schematic_file_path);
+	xs_library_path_add(library_path, schematic_directory.c_str());
+}
+
 std::vector<WireSegment> wires_from_parsed_xschem(const xs_schematic &parsed_schematic) {
 	std::vector<WireSegment> wires;
 	wires.reserve(parsed_schematic.wire_count);
@@ -139,6 +153,7 @@ SchematicLoadResult load_schematic_from_file(
 	xs_library_path_init(&symbol_library_path);
 	load_xschemrc_into_library_path_if_provided(xschemrc_file_path, &symbol_library_path);
 	append_search_paths_to_library_path(extra_symbol_search_paths, &symbol_library_path);
+	add_schematic_own_directory_to_library_path(schematic_file_path, &symbol_library_path);
 
 	xs_schematic parsed_schematic;
 	std::memset(&parsed_schematic, 0, sizeof(parsed_schematic));
