@@ -5,6 +5,44 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-22 — Windows build fix (upstream) + pages on claude
+
+### Windows MSVC failed on `libgen.h`
+First CI run with the new pages workflow surfaced
+`fatal error C1083: Cannot open include file: 'libgen.h'`
+in `third_party/xschem2spice/src/parser.c` line 35. Two findings:
+- `parser.c` includes `<libgen.h>` but never calls dirname/basename —
+  `basename_without_extension()` is hand-rolled with `strrchr`. Dead include.
+- `xschemrc.c` does use `dirname(dup)` in `parent_directory()`. That needed
+  a real portable shim.
+
+Fixed upstream in xschem2spice on branch `windows-build-fix`
+(commit `a8a38bb`):
+- Drop the dead `<libgen.h>` from parser.c.
+- Replace `parent_directory()` with a `strrchr`-based walker that also
+  recognises `\\` on `_WIN32`. Matches POSIX `dirname` semantics for the
+  cases this codebase exercises.
+Verified locally: xschem2spice's Make build + spice3d's schematic_loader
+smoke test still pass.
+
+Updated spice3d's submodule pointer to that commit. **Important:** the fix
+is local until pushed to `origin/windows-build-fix` on xschem2spice — until
+then, CI in spice3d will fail to fetch the submodule at this SHA.
+
+### pages.yml now triggers on `claude` too
+Added `claude` to the push branches so AI-driven work can be previewed
+live without merging first. Single-site repo — most recent successful
+deploy wins, which is the desired staging behavior.
+
+### Action log access from this environment
+Can't reach GitHub Actions logs: no `gh` CLI installed; bare `curl` against
+`api.github.com/repos/sifferman/spice3d/actions/runs` returns 404
+(repo is private; no token is configured for this shell). Until that gap
+is closed, "what's the CI status?" → user-pasted failure text is the
+fastest path.
+
+---
+
 ## 2026-05-22 — session wrap
 
 ### Done this session (4 commits on `claude`)

@@ -19,7 +19,11 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # `claude` deploys to the same Pages site as `main` so AI-driven work
+    # can be previewed live before merging. GitHub Pages only serves one
+    # site per repo — whichever branch ran most recently wins, which is the
+    # behavior we want for a staging flow.
+    branches: [main, claude]
   workflow_dispatch:
 
 permissions:
