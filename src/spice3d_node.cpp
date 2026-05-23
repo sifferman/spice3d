@@ -10,8 +10,13 @@
 #include "godot_cpp/variant/vector2.hpp"
 #include "godot_cpp/variant/vector3.hpp"
 
+extern "C" {
+#include "parser.h"
+}
+
 #include "pdk/zstd_tar_archive_extractor.h"
 #include "scene/schematic_loader.h"
+#include "scene/symbol_drawing_loader.h"
 #include "sim/spice_simulator.h"
 #include "spice3d_version.h"
 
@@ -99,6 +104,8 @@ std::string godot_string_to_std_string(const godot::String &godot_text) {
 
 constexpr double WIRE_THICKNESS_IN_WORLD_UNITS = 4.0;
 constexpr double COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS = 60.0;
+constexpr double SYMBOL_OUTLINE_LINE_THICKNESS_IN_WORLD_UNITS = 2.0;
+constexpr double SYMBOL_PIN_MARKER_HEIGHT_IN_WORLD_UNITS = 1.5;
 
 godot::Vector3 schematic_xy_to_lying_flat_world_position(double schematic_x, double schematic_y) {
 	constexpr double table_surface_world_y = 0.0;
@@ -166,6 +173,131 @@ void add_component_placeholder_mesh_to_parent_node(
 	parent_node->add_child(component_mesh_instance);
 }
 
+void transform_symbol_local_point_to_schematic_global_point(
+		const ComponentInstance &component,
+		double symbol_local_x,
+		double symbol_local_y,
+		double *out_schematic_global_x,
+		double *out_schematic_global_y) {
+	double rotated_local_x = 0.0;
+	double rotated_local_y = 0.0;
+	xs_transform_pin_to_global(
+			component.rotation_quarter_turns,
+			component.flip_flag,
+			symbol_local_x,
+			symbol_local_y,
+			&rotated_local_x,
+			&rotated_local_y);
+	*out_schematic_global_x = component.placement_x + rotated_local_x;
+	*out_schematic_global_y = component.placement_y + rotated_local_y;
+}
+
+void add_symbol_line_mesh_to_parent_node(
+		godot::Node3D *parent_node,
+		const ComponentInstance &component,
+		const SymbolLineSegmentInLocalCoordinates &line_segment_in_local_coordinates,
+		const godot::Ref<godot::Material> &outline_material) {
+	double start_global_x = 0.0;
+	double start_global_y = 0.0;
+	double end_global_x = 0.0;
+	double end_global_y = 0.0;
+	transform_symbol_local_point_to_schematic_global_point(
+			component, line_segment_in_local_coordinates.start_x, line_segment_in_local_coordinates.start_y,
+			&start_global_x, &start_global_y);
+	transform_symbol_local_point_to_schematic_global_point(
+			component, line_segment_in_local_coordinates.end_x, line_segment_in_local_coordinates.end_y,
+			&end_global_x, &end_global_y);
+	const godot::Vector2 start_in_schematic_space(start_global_x, start_global_y);
+	const godot::Vector2 end_in_schematic_space(end_global_x, end_global_y);
+	const godot::Vector2 midpoint_in_schematic_space = (start_in_schematic_space + end_in_schematic_space) * 0.5;
+	const double segment_length = start_in_schematic_space.distance_to(end_in_schematic_space);
+	if (segment_length <= 0.0) return;
+	const double segment_angle_radians = (end_in_schematic_space - start_in_schematic_space).angle();
+
+	godot::Ref<godot::BoxMesh> outline_box_mesh;
+	outline_box_mesh.instantiate();
+	outline_box_mesh->set_size(godot::Vector3(
+			segment_length,
+			SYMBOL_OUTLINE_LINE_THICKNESS_IN_WORLD_UNITS,
+			SYMBOL_OUTLINE_LINE_THICKNESS_IN_WORLD_UNITS));
+
+	godot::MeshInstance3D *outline_mesh_instance = memnew(godot::MeshInstance3D);
+	outline_mesh_instance->set_mesh(outline_box_mesh);
+	outline_mesh_instance->set_material_override(outline_material);
+	outline_mesh_instance->set_position(schematic_xy_to_lying_flat_world_position(
+			midpoint_in_schematic_space.x, midpoint_in_schematic_space.y));
+	outline_mesh_instance->set_rotation(godot::Vector3(0.0, -segment_angle_radians, 0.0));
+	parent_node->add_child(outline_mesh_instance);
+}
+
+void add_symbol_pin_marker_mesh_to_parent_node(
+		godot::Node3D *parent_node,
+		const ComponentInstance &component,
+		const SymbolBoxInLocalCoordinates &box_in_local_coordinates,
+		const godot::Ref<godot::Material> &pin_marker_material) {
+	double corner_a_global_x = 0.0;
+	double corner_a_global_y = 0.0;
+	double corner_b_global_x = 0.0;
+	double corner_b_global_y = 0.0;
+	transform_symbol_local_point_to_schematic_global_point(
+			component, box_in_local_coordinates.minimum_x, box_in_local_coordinates.minimum_y,
+			&corner_a_global_x, &corner_a_global_y);
+	transform_symbol_local_point_to_schematic_global_point(
+			component, box_in_local_coordinates.maximum_x, box_in_local_coordinates.maximum_y,
+			&corner_b_global_x, &corner_b_global_y);
+	const double box_width_in_world_x  = std::abs(corner_b_global_x - corner_a_global_x);
+	const double box_depth_in_world_z  = std::abs(corner_b_global_y - corner_a_global_y);
+	const double box_center_world_x = (corner_a_global_x + corner_b_global_x) * 0.5;
+	const double box_center_world_z = (corner_a_global_y + corner_b_global_y) * 0.5;
+
+	godot::Ref<godot::BoxMesh> pin_marker_box_mesh;
+	pin_marker_box_mesh.instantiate();
+	pin_marker_box_mesh->set_size(godot::Vector3(
+			std::max(box_width_in_world_x, SYMBOL_OUTLINE_LINE_THICKNESS_IN_WORLD_UNITS),
+			SYMBOL_PIN_MARKER_HEIGHT_IN_WORLD_UNITS,
+			std::max(box_depth_in_world_z, SYMBOL_OUTLINE_LINE_THICKNESS_IN_WORLD_UNITS)));
+
+	godot::MeshInstance3D *pin_marker_mesh_instance = memnew(godot::MeshInstance3D);
+	pin_marker_mesh_instance->set_mesh(pin_marker_box_mesh);
+	pin_marker_mesh_instance->set_material_override(pin_marker_material);
+	pin_marker_mesh_instance->set_position(schematic_xy_to_lying_flat_world_position(
+			box_center_world_x, box_center_world_z));
+	parent_node->add_child(pin_marker_mesh_instance);
+}
+
+godot::Ref<godot::StandardMaterial3D> build_symbol_outline_material() {
+	godot::Ref<godot::StandardMaterial3D> outline_material;
+	outline_material.instantiate();
+	outline_material->set_albedo(godot::Color(0.95f, 0.85f, 0.4f));
+	outline_material->set_metallic(0.1f);
+	outline_material->set_roughness(0.45f);
+	return outline_material;
+}
+
+godot::Ref<godot::StandardMaterial3D> build_symbol_pin_marker_material() {
+	godot::Ref<godot::StandardMaterial3D> pin_marker_material;
+	pin_marker_material.instantiate();
+	pin_marker_material->set_albedo(godot::Color(0.85f, 0.55f, 0.25f));
+	pin_marker_material->set_feature(godot::BaseMaterial3D::FEATURE_EMISSION, true);
+	pin_marker_material->set_emission(godot::Color(0.4f, 0.2f, 0.1f));
+	return pin_marker_material;
+}
+
+void add_symbol_drawing_primitives_for_one_component_to_parent_node(
+		godot::Node3D *parent_node,
+		const ComponentInstance &component,
+		const godot::Ref<godot::Material> &outline_material,
+		const godot::Ref<godot::Material> &pin_marker_material) {
+	const SymbolDrawingPrimitivesInLocalCoordinates primitives =
+			load_symbol_drawing_primitives_from_file(component.resolved_symbol_path);
+	for (const auto &one_line_segment : primitives.line_segments) {
+		add_symbol_line_mesh_to_parent_node(parent_node, component, one_line_segment, outline_material);
+	}
+	for (const auto &one_box : primitives.boxes) {
+		add_symbol_pin_marker_mesh_to_parent_node(parent_node, component, one_box, pin_marker_material);
+	}
+}
+
 void add_rendered_meshes_for_schematic_to_parent_node(
 		godot::Node3D *parent_node,
 		const Schematic &loaded_schematic) {
@@ -173,9 +305,16 @@ void add_rendered_meshes_for_schematic_to_parent_node(
 	for (const auto &one_wire : loaded_schematic.wires) {
 		add_wire_segment_mesh_to_parent_node(parent_node, one_wire, wire_material);
 	}
-	godot::Ref<godot::Material> component_material = build_component_render_material();
+	godot::Ref<godot::Material> placeholder_material = build_component_render_material();
+	godot::Ref<godot::Material> outline_material = build_symbol_outline_material();
+	godot::Ref<godot::Material> pin_marker_material = build_symbol_pin_marker_material();
 	for (const auto &one_component : loaded_schematic.component_instances) {
-		add_component_placeholder_mesh_to_parent_node(parent_node, one_component, component_material);
+		if (one_component.symbol_was_resolved && !one_component.resolved_symbol_path.empty()) {
+			add_symbol_drawing_primitives_for_one_component_to_parent_node(
+					parent_node, one_component, outline_material, pin_marker_material);
+		} else {
+			add_component_placeholder_mesh_to_parent_node(parent_node, one_component, placeholder_material);
+		}
 	}
 }
 

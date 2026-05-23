@@ -5,6 +5,59 @@ Newest entries at the top.
 
 ---
 
+## 2026-05-23 — Symbol-internal rendering (L + B primitives from .sym files)
+
+Components no longer render as uniform placeholder cubes. Each
+resolved `.sym` file is now scanned for `L` (line) and `B` (box)
+records, and each record is materialized as a `BoxMesh` in the
+schematic plane:
+
+- `L` records → thin lying-flat box meshes (outline strokes)
+- `B` records → low-profile rectangular box meshes (pin/region markers)
+- `P` / `A` / `T` records are skipped for the first cut (polygons,
+  arcs, text labels — deferred)
+
+### `src/scene/symbol_drawing_loader.{h,cpp}` (new)
+
+A lightweight C++ scanner that reads a `.sym` file line by line and
+returns `SymbolDrawingPrimitivesInLocalCoordinates`. Each line's
+first character drives a switch — only `L` and `B` are parsed (via
+`istringstream`, dropping the unused color integer). All coordinates
+remain in symbol-local space; the caller transforms them.
+
+### Symbol-local → schematic-global transform
+
+We reuse `xs_transform_pin_to_global` from xschem2spice (already
+linked) to rotate/flip a `(symbol_local_x, symbol_local_y)` by the
+component's `rotation_quarter_turns` + `flip_flag`, then add the
+component's `placement_x` / `placement_y`. This is the same code
+path the netlister uses for pin coordinates, so the rendered
+outlines stay aligned with the wires.
+
+### Render dispatch (`add_rendered_meshes_for_schematic_to_parent_node`)
+
+Per component:
+- If `symbol_was_resolved && !resolved_symbol_path.empty()` →
+  draw symbol primitives (outlines + pin markers).
+- Otherwise → fall back to the existing placeholder cube. This
+  keeps unresolved components visible during PDK/xschem fetch
+  failures rather than silently dropping them.
+
+Outline material is a warm yellow (`0.95, 0.85, 0.4`); pin-marker
+material is the same amber as the old placeholder cube but emissive
+so terminals read clearly from above. Both materials are built once
+per render pass and shared across all instances.
+
+### Coord-helper gotcha
+
+When the lying-flat refactor renamed
+`schematic_xy_to_godot_world_position_with_y_flipped` →
+`schematic_xy_to_lying_flat_world_position`, the new symbol-drawing
+helpers referenced the old name in two places. Compiled-then-fixed
+locally before commit.
+
+---
+
 ## 2026-05-23 — Fetching xschem stdlib + sky130 PDK at startup; CORS strategy
 
 End-to-end, the deployed site now fetches the xschem device-symbol
