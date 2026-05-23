@@ -12,11 +12,11 @@ namespace spice3d {
 namespace {
 
 constexpr double INITIAL_ORBIT_PIVOT_WORLD_X = 45.0;
-constexpr double INITIAL_ORBIT_PIVOT_WORLD_Y = -30.0;
-constexpr double INITIAL_ORBIT_PIVOT_WORLD_Z = 0.0;
-constexpr double INITIAL_ORBIT_DISTANCE_FROM_PIVOT = 365.0;
-constexpr double INITIAL_ORBIT_YAW_RADIANS = -0.609;
-constexpr double INITIAL_ORBIT_PITCH_RADIANS = 0.364;
+constexpr double INITIAL_ORBIT_PIVOT_WORLD_Y = 0.0;
+constexpr double INITIAL_ORBIT_PIVOT_WORLD_Z = 30.0;
+constexpr double INITIAL_ORBIT_DISTANCE_FROM_PIVOT = 320.0;
+constexpr double INITIAL_ORBIT_YAW_RADIANS = 0.0;
+constexpr double INITIAL_ORBIT_PITCH_RADIANS = 1.45;
 
 constexpr double ORBIT_RADIANS_PER_MOUSE_PIXEL = 0.006;
 constexpr double MAXIMUM_ABSOLUTE_PITCH_RADIANS = 1.5;

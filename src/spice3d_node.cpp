@@ -99,9 +99,9 @@ std::string godot_string_to_std_string(const godot::String &godot_text) {
 constexpr double WIRE_THICKNESS_IN_WORLD_UNITS = 4.0;
 constexpr double COMPONENT_PLACEHOLDER_SIZE_IN_WORLD_UNITS = 60.0;
 
-godot::Vector3 schematic_xy_to_godot_world_position_with_y_flipped(double schematic_x, double schematic_y) {
-	const double godot_y_pointing_up = -schematic_y;
-	return godot::Vector3(schematic_x, godot_y_pointing_up, 0.0);
+godot::Vector3 schematic_xy_to_lying_flat_world_position(double schematic_x, double schematic_y) {
+	constexpr double table_surface_world_y = 0.0;
+	return godot::Vector3(schematic_x, table_surface_world_y, schematic_y);
 }
 
 godot::Ref<godot::StandardMaterial3D> build_wire_render_material() {
@@ -141,8 +141,8 @@ void add_wire_segment_mesh_to_parent_node(
 	wire_mesh_instance->set_mesh(wire_box_mesh);
 	wire_mesh_instance->set_material_override(wire_material);
 	wire_mesh_instance->set_position(
-			schematic_xy_to_godot_world_position_with_y_flipped(midpoint_in_schematic_space.x, midpoint_in_schematic_space.y));
-	wire_mesh_instance->set_rotation(godot::Vector3(0.0, 0.0, -segment_angle_radians));
+			schematic_xy_to_lying_flat_world_position(midpoint_in_schematic_space.x, midpoint_in_schematic_space.y));
+	wire_mesh_instance->set_rotation(godot::Vector3(0.0, -segment_angle_radians, 0.0));
 	parent_node->add_child(wire_mesh_instance);
 }
 
@@ -161,7 +161,7 @@ void add_component_placeholder_mesh_to_parent_node(
 	component_mesh_instance->set_mesh(placeholder_box_mesh);
 	component_mesh_instance->set_material_override(component_material);
 	component_mesh_instance->set_position(
-			schematic_xy_to_godot_world_position_with_y_flipped(component.placement_x, component.placement_y));
+			schematic_xy_to_lying_flat_world_position(component.placement_x, component.placement_y));
 	parent_node->add_child(component_mesh_instance);
 }
 
