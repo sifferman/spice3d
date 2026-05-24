@@ -85,6 +85,9 @@ jobs:
       - name: Verify ngspice wasm reacts to live `alter` commands
         run: node scripts/test-ngspice-wasm-interactive.js
 
+      - name: Run host-C++ unit tests (schematic loader, streaming zstd-tar extractor)
+        run: make -C test run
+
       - name: Restore SCons cache (web)
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:

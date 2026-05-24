@@ -47,6 +47,19 @@ testbench contains a `.include` of the consolidated stdcell spice
 file and that *no* `.ends` survives in the converted top-level
 testbench (the inline subckt was the only thing contributing one).
 
+New host-C++ regression test
+(`test/test_zstd_tar_archive_extractor.cpp`) builds synthetic
+ustar archives in-memory, zstd-compresses them, runs the
+extractor, and asserts byte-for-byte content. Three cases lock
+in: (1) the exact bug above — an entry whose body ends on a
+512-byte block boundary with zero padding followed immediately
+by another entry; (2) a substring-filtered mixed-size archive
+to confirm filtered-out paths never touch disk; (3) a single
+entry larger than `ZSTD_DStreamOutSize()` to confirm we never
+buffer the whole decompressed stream. Confirmed all three fail
+loudly if the body→header transition fix is reverted. Wired
+into `pages.yml` via `make -C test run`.
+
 ---
 
 ## 2026-05-23 — Buttons drive ngspice via alter; wire colors animate from samples
