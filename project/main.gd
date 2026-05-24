@@ -147,25 +147,61 @@ func stage_text_files_recursively_into_worker_filesystem(
 	return staged_file_count
 
 
-func prepend_pdk_library_include_to_netlist_lines(netlist_lines: PackedStringArray) -> PackedStringArray:
-	var pdk_include_directives := PackedStringArray()
-	pdk_include_directives.append(".lib %s %s" % [
+const SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH := [
+	"V_SPICE3D_TESTBENCH_VPWR VPWR 0 DC 1.8",
+	"V_SPICE3D_TESTBENCH_VGND VGND 0 DC 0",
+	"V_SPICE3D_TESTBENCH_VPB  VPB  0 DC 1.8",
+	"V_SPICE3D_TESTBENCH_VNB  VNB  0 DC 0",
+]
+
+
+func strip_xschem_external_voltage_source_keyword(spice_netlist_line: String) -> String:
+	var trimmed_trailing_external_keyword := spice_netlist_line.strip_edges(false, true)
+	if trimmed_trailing_external_keyword.ends_with(" external"):
+		return trimmed_trailing_external_keyword.substr(
+				0, trimmed_trailing_external_keyword.length() - " external".length())
+	return spice_netlist_line
+
+
+func strip_xschem_escape_backslashes_from_subckt_names(spice_netlist_line: String) -> String:
+	if spice_netlist_line.find("\\") == -1: return spice_netlist_line
+	var output_characters := PackedStringArray()
+	var i := 0
+	while i < spice_netlist_line.length():
+		var one_character := spice_netlist_line[i]
+		if one_character == "\\" and i + 1 < spice_netlist_line.length():
+			output_characters.append(spice_netlist_line[i + 1])
+			i += 2
+		else:
+			output_characters.append(one_character)
+			i += 1
+	return "".join(output_characters)
+
+
+func is_subckt_wrapper_directive(spice_netlist_line: String) -> bool:
+	var stripped_line := spice_netlist_line.strip_edges()
+	if stripped_line.is_empty(): return false
+	if stripped_line.begins_with(".subckt"): return true
+	if stripped_line == ".ends" or stripped_line.begins_with(".ends "): return true
+	return false
+
+
+func convert_xschem_subckt_netlist_into_top_level_testbench(
+		raw_xschem_netlist_lines: PackedStringArray) -> PackedStringArray:
+	var top_level_testbench_lines := PackedStringArray()
+	top_level_testbench_lines.append(".lib %s %s" % [
 			SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
 			SKY130_PDK_LIB_CORNER_NAME])
-	pdk_include_directives.append(".include %s" % SKY130_PDK_STDCELL_LIBRARY_VIRTUAL_PATH_IN_WORKER)
-	var augmented_netlist_lines := PackedStringArray()
-	var inserted_pdk_directives := false
-	for one_existing_line in netlist_lines:
-		augmented_netlist_lines.append(one_existing_line)
-		if not inserted_pdk_directives and one_existing_line.begins_with(".subckt"):
-			augmented_netlist_lines.append_array(pdk_include_directives)
-			inserted_pdk_directives = true
-	if not inserted_pdk_directives:
-		var lines_with_includes_at_top := PackedStringArray()
-		lines_with_includes_at_top.append_array(pdk_include_directives)
-		lines_with_includes_at_top.append_array(augmented_netlist_lines)
-		augmented_netlist_lines = lines_with_includes_at_top
-	return augmented_netlist_lines
+	top_level_testbench_lines.append(".include %s" % SKY130_PDK_STDCELL_LIBRARY_VIRTUAL_PATH_IN_WORKER)
+	top_level_testbench_lines.append_array(
+			PackedStringArray(SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH))
+	for one_existing_line in raw_xschem_netlist_lines:
+		if is_subckt_wrapper_directive(one_existing_line):
+			continue
+		var without_external_keyword := strip_xschem_external_voltage_source_keyword(one_existing_line)
+		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(without_external_keyword)
+		top_level_testbench_lines.append(without_escape_backslashes)
+	return top_level_testbench_lines
 
 
 func push_spice_netlist_and_start_transient_on_web_simulator(
@@ -178,7 +214,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	if netlist_lines.is_empty():
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
-	var netlist_lines_with_pdk_include := prepend_pdk_library_include_to_netlist_lines(netlist_lines)
+	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size()])
 	spice3d_root_node.set_simulation_sample_throttle_on_web_simulator(SIMULATION_SAMPLE_FORWARD_RATE_HZ)
