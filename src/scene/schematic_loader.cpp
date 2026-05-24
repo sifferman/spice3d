@@ -242,28 +242,38 @@ GeneratedSpiceNetlist generate_spice_netlist_text_from_schematic_file(
 	xs_netlister_init(&netlister, &symbol_library_path, lvs_mode_disabled);
 	xs_netlister_resolve_symbols(&netlister, &parsed_schematic);
 
-	char *netlist_text_buffer_address = nullptr;
-	size_t netlist_text_byte_length = 0;
-	FILE *netlist_memory_stream = open_memstream(&netlist_text_buffer_address, &netlist_text_byte_length);
-	if (netlist_memory_stream == nullptr) {
+	FILE *netlist_scratch_temporary_file = std::tmpfile();
+	if (netlist_scratch_temporary_file == nullptr) {
 		xs_netlister_free(&netlister);
 		xs_free_schematic(&parsed_schematic);
 		xs_library_path_free(&symbol_library_path);
-		netlist_result.error_message = "open_memstream failed while preparing netlist buffer";
+		netlist_result.error_message = "tmpfile() failed while preparing netlist buffer";
 		return netlist_result;
 	}
 
-	const int emit_return_code = xs_netlister_emit_spice(&netlister, &parsed_schematic, netlist_memory_stream);
-	std::fflush(netlist_memory_stream);
-	std::fclose(netlist_memory_stream);
+	const int emit_return_code = xs_netlister_emit_spice(
+			&netlister, &parsed_schematic, netlist_scratch_temporary_file);
+	std::fflush(netlist_scratch_temporary_file);
 
-	if (emit_return_code == 0 && netlist_text_buffer_address != nullptr) {
+	if (emit_return_code == 0) {
+		std::fseek(netlist_scratch_temporary_file, 0, SEEK_END);
+		const long netlist_text_byte_length = std::ftell(netlist_scratch_temporary_file);
+		std::rewind(netlist_scratch_temporary_file);
+		if (netlist_text_byte_length > 0) {
+			std::string netlist_text_buffer(static_cast<size_t>(netlist_text_byte_length), '\0');
+			const size_t bytes_read = std::fread(
+					netlist_text_buffer.data(),
+					1,
+					static_cast<size_t>(netlist_text_byte_length),
+					netlist_scratch_temporary_file);
+			netlist_text_buffer.resize(bytes_read);
+			netlist_result.spice_netlist_text = std::move(netlist_text_buffer);
+		}
 		netlist_result.was_successful = true;
-		netlist_result.spice_netlist_text = std::string(netlist_text_buffer_address, netlist_text_byte_length);
 	} else {
 		netlist_result.error_message = "xs_netlister_emit_spice returned " + std::to_string(emit_return_code);
 	}
-	std::free(netlist_text_buffer_address);
+	std::fclose(netlist_scratch_temporary_file);
 
 	xs_netlister_free(&netlister);
 	xs_free_schematic(&parsed_schematic);
