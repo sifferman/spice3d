@@ -77,10 +77,54 @@ void write_octal_into_fixed_width_field(
 	}
 }
 
+void append_ustar_header_block_for_typeflag(
+		std::vector<std::uint8_t> &archive_bytes,
+		const std::string &full_entry_path,
+		std::size_t entry_body_size_in_bytes,
+		char ustar_typeflag_character);
+
+void append_entry_body_and_padding_to_archive_bytes(
+		std::vector<std::uint8_t> &archive_bytes,
+		const std::vector<std::uint8_t> &entry_body_bytes);
+
+void append_pax_extended_header_block_and_body_overriding_next_entry_path(
+		std::vector<std::uint8_t> &archive_bytes,
+		const std::string &pax_path_attribute_value_for_next_entry) {
+	std::string single_record_without_length_prefix =
+			" path=" + pax_path_attribute_value_for_next_entry + "\n";
+	std::size_t length_prefix_digit_count_estimate = 1;
+	std::size_t computed_record_length = 0;
+	for (;;) {
+		computed_record_length = length_prefix_digit_count_estimate + single_record_without_length_prefix.size();
+		const std::size_t length_prefix_digit_count_required = std::to_string(computed_record_length).size();
+		if (length_prefix_digit_count_required == length_prefix_digit_count_estimate) break;
+		length_prefix_digit_count_estimate = length_prefix_digit_count_required;
+	}
+	const std::string complete_pax_record_text =
+			std::to_string(computed_record_length) + single_record_without_length_prefix;
+	const std::vector<std::uint8_t> pax_body_bytes(complete_pax_record_text.begin(), complete_pax_record_text.end());
+	append_ustar_header_block_for_typeflag(
+			archive_bytes,
+			"PaxHeader/long_path",
+			pax_body_bytes.size(),
+			'x');
+	append_entry_body_and_padding_to_archive_bytes(archive_bytes, pax_body_bytes);
+}
+
 void append_ustar_header_block_for_regular_file(
 		std::vector<std::uint8_t> &archive_bytes,
 		const std::string &full_entry_path,
 		std::size_t entry_body_size_in_bytes) {
+	append_ustar_header_block_for_typeflag(
+			archive_bytes, full_entry_path, entry_body_size_in_bytes,
+			static_cast<char>(USTAR_TYPEFLAG_REGULAR_FILE));
+}
+
+void append_ustar_header_block_for_typeflag(
+		std::vector<std::uint8_t> &archive_bytes,
+		const std::string &full_entry_path,
+		std::size_t entry_body_size_in_bytes,
+		char ustar_typeflag_character) {
 	const std::size_t header_start_offset = archive_bytes.size();
 	archive_bytes.resize(header_start_offset + USTAR_BLOCK_SIZE_IN_BYTES, 0);
 	std::uint8_t *header_block_start = archive_bytes.data() + header_start_offset;
@@ -95,7 +139,7 @@ void append_ustar_header_block_for_regular_file(
 	for (std::size_t i = 0; i < USTAR_CHECKSUM_FIELD_LENGTH; ++i) {
 		header_block_start[USTAR_CHECKSUM_FIELD_OFFSET + i] = ' ';
 	}
-	header_block_start[USTAR_TYPEFLAG_FIELD_OFFSET] = USTAR_TYPEFLAG_REGULAR_FILE;
+	header_block_start[USTAR_TYPEFLAG_FIELD_OFFSET] = static_cast<std::uint8_t>(ustar_typeflag_character);
 	std::memcpy(header_block_start + USTAR_MAGIC_FIELD_OFFSET, "ustar", 5);
 	header_block_start[USTAR_MAGIC_FIELD_OFFSET + 5] = 0;
 	header_block_start[USTAR_VERSION_FIELD_OFFSET] = '0';
@@ -324,12 +368,81 @@ void test_archive_large_enough_to_require_multiple_decompression_chunks() {
 	std::filesystem::remove_all(output_directory);
 }
 
+void test_pax_extended_header_long_filename_overrides_truncated_ustar_name_field() {
+	const std::string long_full_entry_path_that_would_be_truncated_in_ustar_name_field =
+			"keep/very_long_subdirectory_name_used_to_force_the_ustar_name_field_to_truncate/"
+			"sky130_fd_pr__cap_vpp_08p6x07p8_l1m1m2_shieldpo_floatm3.model.spice";
+	const std::vector<std::uint8_t> entry_body_bytes = build_deterministic_body_of_exact_size(777, 0x12345);
+
+	std::vector<std::uint8_t> archive_bytes;
+	append_pax_extended_header_block_and_body_overriding_next_entry_path(
+			archive_bytes, long_full_entry_path_that_would_be_truncated_in_ustar_name_field);
+	append_ustar_header_block_for_regular_file(
+			archive_bytes,
+			"truncated_fallback_name_not_used.sp",
+			entry_body_bytes.size());
+	append_entry_body_and_padding_to_archive_bytes(archive_bytes, entry_body_bytes);
+
+	const std::vector<std::uint8_t> a_second_regular_entry_body_bytes =
+			build_deterministic_body_of_exact_size(42, 0x99);
+	append_ustar_header_block_for_regular_file(
+			archive_bytes,
+			"keep/regular_entry_after_pax_consumed_one.bin",
+			a_second_regular_entry_body_bytes.size());
+	append_entry_body_and_padding_to_archive_bytes(archive_bytes, a_second_regular_entry_body_bytes);
+	append_trailing_two_zero_blocks_to_archive_bytes(archive_bytes);
+
+	const std::vector<std::uint8_t> compressed_bytes = zstd_compress_archive_bytes(archive_bytes);
+	const std::string output_directory = make_unique_test_output_directory_under_tmp("pax_long_path");
+
+	const auto extraction_result = spice3d::extract_zstd_tar_archive_filtered_by_path_substring(
+			compressed_bytes.data(), compressed_bytes.size(),
+			output_directory,
+			std::vector<std::string>{"keep/"});
+
+	REQUIRE_TRUE(extraction_result.was_successful,
+			"PaxHeader-prefixed entry should extract cleanly");
+	REQUIRE_EQUAL(extraction_result.extracted_file_count, 2,
+			"PaxHeader entry itself should NOT count as an extracted file; "
+			"the regular entry it prefixes + the trailing regular entry should both extract");
+
+	const std::string expected_destination_absolute_path = output_directory + "/"
+			+ long_full_entry_path_that_would_be_truncated_in_ustar_name_field;
+	REQUIRE_TRUE(std::filesystem::exists(expected_destination_absolute_path),
+			"File must be written under the FULL path supplied by the PaxHeader, "
+			"not under the truncated fallback name from the ustar name field. "
+			"This was the bug that caused ngspice to fail with "
+			"`Could not find include file ...cap_vpp_08p6x07p8_*.model.spice` in the deployed worker.");
+	const std::vector<std::uint8_t> bytes_on_disk = read_file_bytes_from_filesystem(
+			expected_destination_absolute_path);
+	REQUIRE_TRUE(bytes_on_disk == entry_body_bytes,
+			"the body bytes under the PaxHeader-supplied path should match what was packed");
+
+	const std::string truncated_fallback_absolute_path = output_directory + "/truncated_fallback_name_not_used.sp";
+	REQUIRE_TRUE(!std::filesystem::exists(truncated_fallback_absolute_path),
+			"The truncated fallback name from the ustar header MUST NOT be used "
+			"when a PaxHeader supplies a 'path' attribute for the next entry.");
+
+	const std::string regular_entry_after_pax_absolute_path =
+			output_directory + "/keep/regular_entry_after_pax_consumed_one.bin";
+	REQUIRE_TRUE(std::filesystem::exists(regular_entry_after_pax_absolute_path),
+			"A regular entry that follows a PaxHeader-prefixed entry should still extract — "
+			"the PaxHeader override applies to exactly one following entry, not all subsequent ones");
+	const std::vector<std::uint8_t> trailing_entry_bytes_on_disk = read_file_bytes_from_filesystem(
+			regular_entry_after_pax_absolute_path);
+	REQUIRE_TRUE(trailing_entry_bytes_on_disk == a_second_regular_entry_body_bytes,
+			"trailing-after-PaxHeader regular entry's bytes should match what was packed");
+
+	std::filesystem::remove_all(output_directory);
+}
+
 } // namespace
 
 int main() {
 	test_single_entry_whose_body_ends_exactly_on_a_block_boundary_with_zero_padding();
 	test_archive_with_mixed_entry_sizes_and_substring_filter();
 	test_archive_large_enough_to_require_multiple_decompression_chunks();
+	test_pax_extended_header_long_filename_overrides_truncated_ustar_name_field();
 
 	if (failed_assertion_count > 0) {
 		std::fprintf(stderr, "\n%d assertion(s) failed.\n", failed_assertion_count);

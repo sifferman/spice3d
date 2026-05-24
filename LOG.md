@@ -6,6 +6,54 @@ description of [#1](https://github.com/sifferman/spice3d/pull/1).
 
 ---
 
+## 2026-05-23 — PaxHeader-aware tar extraction; long PDK filenames no longer truncated
+
+The deployed page surfaced
+`Error: Could not find include file
+../../../libs.ref/sky130_fd_pr/spice/sky130_fd_pr__cap_vpp_08p6x07p8_l1m1m2_shieldpo_floatm3.model.spice`
+once SendChar diagnostics were wired up. The file *was* in the
+tar archive — but my extractor wrote it under the truncated
+filename `sky130_fd_pr__cap_vpp_*.model.sp` (last six characters
+chopped).
+
+Cause: ustar's `name` field is only 100 bytes. For longer paths,
+GNU tar (and the sky130 ciel publisher) writes a PaxHeader entry
+(typeflag `'x'`) immediately before the real file entry. The
+PaxHeader body contains key-value records, one of which is
+`path=<full-path>`. The real file entry that follows uses a
+truncated fallback name in its own header.
+
+My streaming extractor was treating PaxHeader as just another
+unrecognized-typeflag entry (so its body got skipped) and then
+opening the real entry under the truncated fallback name. ~99
+`.model.spice` files were affected.
+
+Fix in `src/pdk/zstd_tar_archive_extractor.cpp`: state-machine
+now recognizes typeflag `'x'` (and `'g'`), buffers the
+PaxHeader body, parses out the `path=` record via
+`find_pax_attribute_value_by_key`, and stashes it in
+`pending_pax_path_override_for_next_regular_entry_`. The next
+regular entry's path comes from that override when present
+instead of from the truncated name+prefix fields. The override
+is cleared after one use (PaxHeader applies to exactly one
+following entry).
+
+`test_zstd_tar_archive_extractor.cpp` got a fourth case that
+builds a synthetic archive with a PaxHeader supplying a long
+path, an immediately-following regular entry with a truncated
+fallback name, and a trailing regular entry. The test asserts
+the file lands under the full path (not the fallback), the
+fallback name is *not* on disk, and the trailing entry's path
+isn't accidentally overridden too. Confirmed it fails with 3
+assertions when the path-override line is reverted.
+
+Re-extracting `/tmp/sky130_fd_pr.tar.zst` with the fix in place
+now yields the full 1350 files with non-truncated names — the
+specific `cap_vpp_08p6x07p8` file is on disk at the path
+`sky130_fd_pr__model__cap_vpp.model.spice` expects.
+
+---
+
 ## 2026-05-23 — Surface SendChar/SendStat from ngspice worker to console
 
 First end-to-end deployed run hit `ngspice controlled_exit

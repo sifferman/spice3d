@@ -23,6 +23,45 @@ constexpr std::size_t USTAR_PREFIX_FIELD_OFFSET = 345;
 constexpr std::size_t USTAR_PREFIX_FIELD_LENGTH = 155;
 constexpr char USTAR_TYPEFLAG_REGULAR_FILE_PRIMARY = '0';
 constexpr char USTAR_TYPEFLAG_REGULAR_FILE_LEGACY_NUL = '\0';
+constexpr char USTAR_TYPEFLAG_PAX_EXTENDED_HEADER_FOR_NEXT_ENTRY = 'x';
+constexpr char USTAR_TYPEFLAG_PAX_GLOBAL_EXTENDED_HEADER = 'g';
+
+std::string find_pax_attribute_value_by_key(
+		const std::string &pax_extended_header_body,
+		const std::string &attribute_key_to_find) {
+	std::size_t cursor_byte_offset = 0;
+	while (cursor_byte_offset < pax_extended_header_body.size()) {
+		const std::size_t one_record_first_space_offset = pax_extended_header_body.find(
+				' ', cursor_byte_offset);
+		if (one_record_first_space_offset == std::string::npos) return {};
+		const std::size_t one_record_length_in_bytes_as_decimal = static_cast<std::size_t>(std::atoll(
+				pax_extended_header_body.substr(
+						cursor_byte_offset,
+						one_record_first_space_offset - cursor_byte_offset).c_str()));
+		if (one_record_length_in_bytes_as_decimal == 0
+				|| cursor_byte_offset + one_record_length_in_bytes_as_decimal > pax_extended_header_body.size()) {
+			return {};
+		}
+		const std::size_t one_record_key_value_start_offset = one_record_first_space_offset + 1;
+		const std::size_t one_record_terminator_offset =
+				cursor_byte_offset + one_record_length_in_bytes_as_decimal - 1;
+		const std::size_t one_record_equals_offset = pax_extended_header_body.find(
+				'=', one_record_key_value_start_offset);
+		if (one_record_equals_offset != std::string::npos
+				&& one_record_equals_offset < one_record_terminator_offset) {
+			const std::string one_record_key_text = pax_extended_header_body.substr(
+					one_record_key_value_start_offset,
+					one_record_equals_offset - one_record_key_value_start_offset);
+			if (one_record_key_text == attribute_key_to_find) {
+				return pax_extended_header_body.substr(
+						one_record_equals_offset + 1,
+						one_record_terminator_offset - (one_record_equals_offset + 1));
+			}
+		}
+		cursor_byte_offset += one_record_length_in_bytes_as_decimal;
+	}
+	return {};
+}
 
 bool block_is_all_zero_bytes(const std::uint8_t *block_start) {
 	for (std::size_t byte_index = 0; byte_index < TAR_BLOCK_SIZE_IN_BYTES; ++byte_index) {
@@ -177,12 +216,13 @@ private:
 		}
 		const std::int64_t entry_size_in_bytes = parse_octal_size_field(
 				pending_header_block_buffer_ + USTAR_SIZE_FIELD_OFFSET, USTAR_SIZE_FIELD_LENGTH);
-		const std::string full_entry_path = full_path_from_tar_header(pending_header_block_buffer_);
-
-		const bool should_extract_this_entry = tar_entry_is_a_regular_file(pending_header_block_buffer_)
-				&& any_substring_is_contained_in_path(
-						full_entry_path,
-						keep_only_paths_containing_any_of_these_substrings_);
+		const char this_entry_typeflag_character = static_cast<char>(
+				pending_header_block_buffer_[USTAR_TYPEFLAG_FIELD_OFFSET]);
+		const std::string fallback_full_entry_path_from_tar_header_fields =
+				full_path_from_tar_header(pending_header_block_buffer_);
+		const std::string full_entry_path = pending_pax_path_override_for_next_regular_entry_.empty()
+				? fallback_full_entry_path_from_tar_header_fields
+				: pending_pax_path_override_for_next_regular_entry_;
 
 		currently_extracting_entry_remaining_body_byte_count_ = static_cast<std::size_t>(entry_size_in_bytes);
 		currently_skipping_entry_padding_byte_count_ =
@@ -190,12 +230,37 @@ private:
 						* TAR_BLOCK_SIZE_IN_BYTES
 				- static_cast<std::size_t>(entry_size_in_bytes);
 
+		const bool this_entry_is_a_pax_extended_header =
+				this_entry_typeflag_character == USTAR_TYPEFLAG_PAX_EXTENDED_HEADER_FOR_NEXT_ENTRY
+				|| this_entry_typeflag_character == USTAR_TYPEFLAG_PAX_GLOBAL_EXTENDED_HEADER;
+		if (this_entry_is_a_pax_extended_header) {
+			currently_buffering_pax_extended_header_body_ = true;
+			pax_extended_header_body_buffer_.clear();
+			pax_extended_header_body_buffer_.reserve(
+					currently_extracting_entry_remaining_body_byte_count_);
+			if (currently_extracting_entry_remaining_body_byte_count_ == 0
+					&& currently_skipping_entry_padding_byte_count_ == 0) {
+				finalize_pax_extended_header_body_into_path_override();
+				currently_parsing_header_block_ = true;
+				return true;
+			}
+			currently_parsing_header_block_ = false;
+			return true;
+		}
+
+		const bool should_extract_this_entry = tar_entry_is_a_regular_file(pending_header_block_buffer_)
+				&& any_substring_is_contained_in_path(
+						full_entry_path,
+						keep_only_paths_containing_any_of_these_substrings_);
+
 		if (currently_extracting_entry_remaining_body_byte_count_ == 0
 				&& currently_skipping_entry_padding_byte_count_ == 0) {
+			pending_pax_path_override_for_next_regular_entry_.clear();
 			currently_parsing_header_block_ = true;
 			return true;
 		}
 
+		pending_pax_path_override_for_next_regular_entry_.clear();
 		if (should_extract_this_entry) {
 			const std::string destination_absolute_path = filesystem_output_directory_absolute_path_
 					+ std::string("/") + full_entry_path;
@@ -225,7 +290,10 @@ private:
 		if (currently_extracting_entry_remaining_body_byte_count_ > 0) {
 			const std::size_t bytes_to_consume_for_body = std::min(
 					currently_extracting_entry_remaining_body_byte_count_, bytes_length);
-			if (currently_extracting_destination_file_handle_ != nullptr) {
+			if (currently_buffering_pax_extended_header_body_) {
+				pax_extended_header_body_buffer_.append(
+						reinterpret_cast<const char *>(bytes_start), bytes_to_consume_for_body);
+			} else if (currently_extracting_destination_file_handle_ != nullptr) {
 				const std::size_t bytes_actually_written = std::fwrite(
 						bytes_start, 1, bytes_to_consume_for_body,
 						currently_extracting_destination_file_handle_);
@@ -238,7 +306,9 @@ private:
 			}
 			currently_extracting_entry_remaining_body_byte_count_ -= bytes_to_consume_for_body;
 			if (currently_extracting_entry_remaining_body_byte_count_ == 0) {
-				if (currently_extracting_destination_file_handle_ != nullptr) {
+				if (currently_buffering_pax_extended_header_body_) {
+					finalize_pax_extended_header_body_into_path_override();
+				} else if (currently_extracting_destination_file_handle_ != nullptr) {
 					std::fclose(currently_extracting_destination_file_handle_);
 					currently_extracting_destination_file_handle_ = nullptr;
 				}
@@ -257,6 +327,16 @@ private:
 		return bytes_to_consume_for_padding;
 	}
 
+	void finalize_pax_extended_header_body_into_path_override() {
+		const std::string pax_path_attribute_value = find_pax_attribute_value_by_key(
+				pax_extended_header_body_buffer_, "path");
+		if (!pax_path_attribute_value.empty()) {
+			pending_pax_path_override_for_next_regular_entry_ = pax_path_attribute_value;
+		}
+		currently_buffering_pax_extended_header_body_ = false;
+		pax_extended_header_body_buffer_.clear();
+	}
+
 	const std::string filesystem_output_directory_absolute_path_;
 	const std::vector<std::string> keep_only_paths_containing_any_of_these_substrings_;
 
@@ -266,6 +346,10 @@ private:
 	std::size_t currently_extracting_entry_remaining_body_byte_count_ = 0;
 	std::size_t currently_skipping_entry_padding_byte_count_ = 0;
 	std::FILE *currently_extracting_destination_file_handle_ = nullptr;
+
+	bool currently_buffering_pax_extended_header_body_ = false;
+	std::string pax_extended_header_body_buffer_;
+	std::string pending_pax_path_override_for_next_regular_entry_;
 
 	bool finished_parsing_at_zero_block_ = false;
 	bool encountered_fatal_parsing_error_ = false;
