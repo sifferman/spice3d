@@ -26,13 +26,11 @@ const SKY130_CORS_PROXY_URL_PREFIX := "https://ciel-cors-proxy.sifferman.workers
 const SKY130_ARCHIVE_FILENAMES_TO_FETCH_AT_STARTUP := [
 	"common.tar.zst",
 	"sky130_fd_pr.tar.zst",
-	"sky130_fd_sc_hd.tar.zst",
 ]
 const SKY130_PATH_SUBSTRINGS_TO_KEEP_DURING_EXTRACTION := [
 	"/libs.tech/combined/",
 	"/libs.tech/xschem/",
 	"/libs.ref/sky130_fd_pr/spice/",
-	"/libs.ref/sky130_fd_sc_hd/spice/",
 ]
 
 
@@ -73,11 +71,16 @@ const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 30.0
 
 const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
 const SKY130_PDK_LIB_CORNER_NAME := "tt"
-const SKY130_PDK_STDCELL_LIBRARY_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice"
 const SKY130_PDK_SOURCE_SUBDIRECTORIES_RELATIVE_TO_CIEL_ROOT := [
 	"/sky130A/libs.tech/combined",
 	"/sky130A/libs.ref/sky130_fd_pr/spice",
-	"/sky130A/libs.ref/sky130_fd_sc_hd/spice",
+]
+
+const SKY130_FD_SC_HD_INV_1_INLINE_SUBCKT_DEFINITION_LINES := [
+	".subckt sky130_fd_sc_hd__inv_1 A VGND VNB VPB VPWR Y",
+	"X0 VGND A Y VNB sky130_fd_pr__nfet_01v8 w=650000u l=150000u",
+	"X1 Y A VPWR VPB sky130_fd_pr__pfet_01v8_hvt w=1e+06u l=150000u",
+	".ends",
 ]
 
 var pressed_button_high_state_by_instance_name: Dictionary = {}
@@ -192,7 +195,8 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 	top_level_testbench_lines.append(".lib %s %s" % [
 			SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
 			SKY130_PDK_LIB_CORNER_NAME])
-	top_level_testbench_lines.append(".include %s" % SKY130_PDK_STDCELL_LIBRARY_VIRTUAL_PATH_IN_WORKER)
+	top_level_testbench_lines.append_array(
+			PackedStringArray(SKY130_FD_SC_HD_INV_1_INLINE_SUBCKT_DEFINITION_LINES))
 	top_level_testbench_lines.append_array(
 			PackedStringArray(SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH))
 	for one_existing_line in raw_xschem_netlist_lines:

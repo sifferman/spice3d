@@ -67,16 +67,21 @@ func test_subckt_to_testbench_conversion_strips_all_three_xschem_artifacts() -> 
 			raw_xschem_emission)
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_false(single_blob_for_inspection.contains(".subckt button_test"),
-			"`.subckt` wrapper header must be removed — ngspice needs a top-level testbench.")
-	assert_false(single_blob_for_inspection.contains(".ends"),
-			"`.ends` closing line must be removed.")
+			"`.subckt button_test` wrapper header must be removed — ngspice needs a top-level testbench.")
+	var ends_directive_occurrence_count := 0
+	for one_line in converted_lines:
+		if one_line.strip_edges() == ".ends" or one_line.strip_edges().begins_with(".ends "):
+			ends_directive_occurrence_count += 1
+	assert_eq(ends_directive_occurrence_count, 1,
+			"Exactly one `.ends` should survive — the inline inv_1 subckt's closing. "
+			+ "The original xschem button_test wrapper's `.ends` must be stripped.")
 	assert_false(single_blob_for_inspection.contains(" external"),
 			"xschem's 'external' keyword must be stripped (ngspice rejects it).")
 	assert_false(single_blob_for_inspection.contains("\\"),
 			"xschem's '\\inv_1' escape must be stripped (subckt name otherwise won't match).")
 	assert_true(single_blob_for_inspection.contains(".lib"),
-			"PDK '.lib' include must be prepended to the testbench.")
-	assert_true(single_blob_for_inspection.contains(".include"),
-			"sky130 stdcell '.include' must be prepended to the testbench.")
+			"PDK '.lib' directive must be prepended to the testbench.")
+	assert_true(single_blob_for_inspection.contains(".subckt sky130_fd_sc_hd__inv_1"),
+			"Inlined inv_1 subckt definition must be present (we don't fetch the full stdcell archive).")
 	assert_true(single_blob_for_inspection.contains("VPWR"),
 			"Rail definition for VPWR must be present in the testbench.")
