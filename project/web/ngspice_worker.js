@@ -45,6 +45,14 @@ function postSimulationSampleMessage(simulationTimeSeconds, orderedNodeVoltages)
 	});
 }
 
+function postNgspiceDiagnosticMessage(diagnosticOriginChannel, diagnosticTextFromNgspice) {
+	self.postMessage({
+		messageKind: 'ngspiceDiagnostic',
+		diagnosticOriginChannel: diagnosticOriginChannel,
+		diagnosticText: diagnosticTextFromNgspice,
+	});
+}
+
 function readVecValuesAllStructIntoSample(allVectorValuesPointer) {
 	const vectorCount = ngspiceWebAssemblyModule.HEAP32[allVectorValuesPointer >> 2];
 	const vectorEntryArrayPointer = ngspiceWebAssemblyModule.HEAPU32[(allVectorValuesPointer + 8) >> 2];
@@ -77,10 +85,18 @@ function readVecInfoAllStructIntoOrderedNodeNames(initialVectorInfoPointer) {
 
 function registerSharedspiceCallbacksWithNgspice() {
 	const sendCharCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
-			function discardLogMessages(textPointer, libraryInstanceId, userDataPointer) { return 0; },
+			function forwardSendCharOutputToBridge(textPointer, libraryInstanceId, userDataPointer) {
+				const oneLineFromNgspice = ngspiceWebAssemblyModule.UTF8ToString(textPointer);
+				postNgspiceDiagnosticMessage('SendChar', oneLineFromNgspice);
+				return 0;
+			},
 			'iiii');
 	const sendStatCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
-			function discardStatusMessages(textPointer, libraryInstanceId, userDataPointer) { return 0; },
+			function forwardSendStatOutputToBridge(textPointer, libraryInstanceId, userDataPointer) {
+				const oneStatusLineFromNgspice = ngspiceWebAssemblyModule.UTF8ToString(textPointer);
+				postNgspiceDiagnosticMessage('SendStat', oneStatusLineFromNgspice);
+				return 0;
+			},
 			'iiii');
 	const controlledExitCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
 			function reportControlledExit(exitStatus, unloadImmediately, requestQuit, libraryInstanceId, userDataPointer) {

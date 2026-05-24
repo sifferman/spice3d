@@ -154,6 +154,10 @@
 				case 'error':
 					console.error('[spice3d] ngspice worker reported error: ' + workerMessage.errorText);
 					break;
+				case 'ngspiceDiagnostic':
+					console.log('[ngspice/' + workerMessage.diagnosticOriginChannel + '] '
+							+ workerMessage.diagnosticText);
+					break;
 			}
 		},
 	};

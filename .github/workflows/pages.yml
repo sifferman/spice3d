@@ -85,6 +85,9 @@ jobs:
       - name: Verify ngspice wasm reacts to live `alter` commands
         run: node scripts/test-ngspice-wasm-interactive.js
 
+      - name: Verify SendChar diagnostics reach the host
+        run: node scripts/test-ngspice-wasm-sendchar-surface.js
+
       - name: Run host-C++ unit tests (schematic loader, streaming zstd-tar extractor)
         run: make -C test run
 

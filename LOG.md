@@ -6,6 +6,33 @@ description of [#1](https://github.com/sifferman/spice3d/pull/1).
 
 ---
 
+## 2026-05-23 — Surface SendChar/SendStat from ngspice worker to console
+
+First end-to-end deployed run hit `ngspice controlled_exit
+status=1` with no diagnostic context whatsoever. Cause: the
+worker's SendChar and SendStat callbacks were registered as
+`discardLogMessages` / `discardStatusMessages` — every line
+ngspice tried to print about why it bailed went into the void.
+
+Wired both callbacks through a new `ngspiceDiagnostic` message
+posted to the bridge, which logs each line as
+`[ngspice/SendChar]` or `[ngspice/SendStat]` in the browser
+console. The worker now produces the same diagnostic surface
+the local CLI ngspice would.
+
+Added `scripts/test-ngspice-wasm-sendchar-surface.js` as a
+regression test: it boots the wasm module with a SendChar
+callback that captures into an array, issues `version`, and
+asserts the capture contains the banner text. A future
+refactor that goes back to a no-op SendChar callback will
+fail this test in CI.
+
+The underlying ngspice failure on the deployed page is still
+unidentified — needs the next deploy + console paste to see
+what SendChar prints before `controlled_exit`.
+
+---
+
 ## 2026-05-23 — Streaming zstd→tar extractor; full sky130_fd_sc_hd archive now fits
 
 The wasm 2 GB heap couldn't decompress the full 122 MB
