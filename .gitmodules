@@ -10,3 +10,6 @@
 [submodule "third_party/ngspice"]
 	path = third_party/ngspice
 	url = https://git.code.sf.net/p/ngspice/ngspice
+[submodule "third_party/gut"]
+	path = third_party/gut
+	url = https://github.com/bitwes/Gut.git

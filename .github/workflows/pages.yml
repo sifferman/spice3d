@@ -144,6 +144,12 @@ jobs:
           godot --headless --import || true
           godot --headless --import
 
+      - name: Run GUT headless unit tests
+        run: |
+          set -euo pipefail
+          cd project
+          godot --headless -s addons/gut/gut_cmdln.gd -gdir=res://test/unit -gexit
+
       - name: Web export
         run: |
           set -euo pipefail
