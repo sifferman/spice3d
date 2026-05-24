@@ -1,162 +1,193 @@
-// Web Worker that hosts the ngspice WebAssembly module. The
-// `globalThis.spice3d` bridge in ngspice_bridge.js posts messages here
-// asking us to load a netlist, run a transient analysis, etc. We drive
-// the CLI build of ngspice via callMain + Emscripten FS for now; an
-// interactive sharedspice path can replace this once libtool gets a
-// proper wasm32-unknown-emscripten host pattern.
+// Web Worker that hosts the ngspice sharedspice WebAssembly module
+// (built with --with-ngshared). The bridge in ngspice_bridge.js posts
+// messages here describing what the host wants (loadNetlist /
+// startTransient / halt / externalVoltage), and we stream simulation
+// samples back via postMessage as ngspice's SendData callback fires.
 
-const SMOKE_TEST_NETLIST_TEXT = [
-	'spice3d smoke test rc transient',
-	'V1 in 0 PULSE(0 1 0 0 0 1u 2u)',
-	'R1 in out 1k',
-	'C1 out 0 1n',
-	'.tran 100n 2u',
-	'.print tran v(in) v(out)',
-	'.end',
+importScripts('ngspice.js');
+
+const FAKE_PROC_MEMINFO_TEXT_FOR_NGSPICE_BUFFER_SIZING = [
+	'MemTotal:        1048576 kB',
+	'MemFree:         1048576 kB',
+	'MemAvailable:    1048576 kB',
 	'',
 ].join('\n');
 
-const captured_stdout_lines_during_current_invocation = [];
-const captured_stderr_lines_during_current_invocation = [];
+let ngspiceWebAssemblyModule = null;
+let ngspiceSendCommand = null;
+let orderedNodeNamesFromLatestInit = null;
+let bufferedSampleCountSinceLastFlush = 0;
 
-const emscriptenModuleOptions = {
-	noInitialRun: true,
-	noExitRuntime: true,
-	print: function captureNgspiceStdoutLine(textLine) {
-		captured_stdout_lines_during_current_invocation.push(String(textLine));
-	},
-	printErr: function captureNgspiceStderrLine(textLine) {
-		captured_stderr_lines_during_current_invocation.push(String(textLine));
-	},
-	locateFile: function locateAdjacentNgspiceWasmFile(relativeFileName) {
-		return relativeFileName;
-	},
-};
+const SAMPLE_BUFFER_FLUSH_INTERVAL_IN_SAMPLES = 16;
 
 function postWorkerErrorMessage(errorText) {
 	self.postMessage({ messageKind: 'error', errorText: errorText });
 }
 
-function postWorkerReadyMessage(smokeTestStdoutText, smokeTestStderrText) {
+function postWorkerReadyMessage() {
+	self.postMessage({ messageKind: 'workerReady', isPlaceholder: false });
+}
+
+function postRunningStateChangedMessage(isSimulationRunning) {
+	self.postMessage({ messageKind: 'runningStateChanged', isSimulationRunning: Boolean(isSimulationRunning) });
+}
+
+function postNodeNamesMessage(orderedNodeNames) {
+	self.postMessage({ messageKind: 'nodeNames', nodeNames: orderedNodeNames });
+}
+
+function postSimulationSampleMessage(simulationTimeSeconds, orderedNodeVoltages) {
 	self.postMessage({
-		messageKind: 'workerReady',
-		isPlaceholder: false,
-		smokeTestStdoutText: smokeTestStdoutText,
-		smokeTestStderrText: smokeTestStderrText,
+		messageKind: 'simulationSample',
+		sample: {
+			simulationTimeSeconds: simulationTimeSeconds,
+			nodeVoltages: orderedNodeVoltages,
+		},
 	});
 }
 
-function postSmokeTestRanMessage(stdoutText, stderrText, exitStatus) {
-	self.postMessage({
-		messageKind: 'ngspiceSmokeTestRan',
-		stdoutText: stdoutText,
-		stderrText: stderrText,
-		exitStatus: exitStatus,
-	});
+function readVecValuesAllStructIntoSample(allVectorValuesPointer) {
+	const vectorCount = ngspiceWebAssemblyModule.HEAP32[allVectorValuesPointer >> 2];
+	const vectorEntryArrayPointer = ngspiceWebAssemblyModule.HEAPU32[(allVectorValuesPointer + 8) >> 2];
+	let simulationTimeSeconds = 0.0;
+	const orderedNodeVoltages = new Array(vectorCount);
+	for (let vectorIndex = 0; vectorIndex < vectorCount; ++vectorIndex) {
+		const vectorEntryPointer = ngspiceWebAssemblyModule.HEAPU32[(vectorEntryArrayPointer >> 2) + vectorIndex];
+		const namePointer = ngspiceWebAssemblyModule.HEAPU32[vectorEntryPointer >> 2];
+		const realPartOfValue = ngspiceWebAssemblyModule.HEAPF64[(vectorEntryPointer + 8) >> 3];
+		const vectorName = ngspiceWebAssemblyModule.UTF8ToString(namePointer);
+		if (vectorName === 'time') simulationTimeSeconds = realPartOfValue;
+		orderedNodeVoltages[vectorIndex] = realPartOfValue;
+	}
+	return { simulationTimeSeconds, orderedNodeVoltages };
 }
 
-function takeCapturedStdoutText() {
-	const text = captured_stdout_lines_during_current_invocation.join('\n');
-	captured_stdout_lines_during_current_invocation.length = 0;
-	return text;
+function readVecInfoAllStructIntoOrderedNodeNames(initialVectorInfoPointer) {
+	const vectorCountFieldOffsetInBytes = 16;
+	const vectorEntryArrayFieldOffsetInBytes = 20;
+	const vectorCount = ngspiceWebAssemblyModule.HEAP32[(initialVectorInfoPointer + vectorCountFieldOffsetInBytes) >> 2];
+	const vectorEntryArrayPointer = ngspiceWebAssemblyModule.HEAPU32[(initialVectorInfoPointer + vectorEntryArrayFieldOffsetInBytes) >> 2];
+	const orderedNodeNames = [];
+	for (let vectorIndex = 0; vectorIndex < vectorCount; ++vectorIndex) {
+		const vectorEntryPointer = ngspiceWebAssemblyModule.HEAPU32[(vectorEntryArrayPointer >> 2) + vectorIndex];
+		const vecnamePointer = ngspiceWebAssemblyModule.HEAPU32[(vectorEntryPointer + 4) >> 2];
+		orderedNodeNames.push(ngspiceWebAssemblyModule.UTF8ToString(vecnamePointer));
+	}
+	return orderedNodeNames;
 }
 
-function takeCapturedStderrText() {
-	const text = captured_stderr_lines_during_current_invocation.join('\n');
-	captured_stderr_lines_during_current_invocation.length = 0;
-	return text;
-}
-
-function writeFileIntoEmscriptenVirtualFileSystem(filePath, fileText) {
-	self.Module.FS.writeFile(filePath, fileText);
+function registerSharedspiceCallbacksWithNgspice() {
+	const sendCharCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
+			function discardLogMessages(textPointer, libraryInstanceId, userDataPointer) { return 0; },
+			'iiii');
+	const sendStatCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
+			function discardStatusMessages(textPointer, libraryInstanceId, userDataPointer) { return 0; },
+			'iiii');
+	const controlledExitCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
+			function reportControlledExit(exitStatus, unloadImmediately, requestQuit, libraryInstanceId, userDataPointer) {
+				postWorkerErrorMessage('ngspice controlled_exit status=' + exitStatus);
+				return 0;
+			},
+			'iiiiii');
+	const sendDataCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
+			function publishSimulationSample(allVectorValuesPointer, vectorCount, libraryInstanceId, userDataPointer) {
+				const sample = readVecValuesAllStructIntoSample(allVectorValuesPointer);
+				postSimulationSampleMessage(sample.simulationTimeSeconds, sample.orderedNodeVoltages);
+				bufferedSampleCountSinceLastFlush = (bufferedSampleCountSinceLastFlush + 1) % SAMPLE_BUFFER_FLUSH_INTERVAL_IN_SAMPLES;
+				return 0;
+			},
+			'iiiii');
+	const sendInitDataCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
+			function publishOrderedNodeNames(initialVectorInfoPointer, libraryInstanceId, userDataPointer) {
+				orderedNodeNamesFromLatestInit = readVecInfoAllStructIntoOrderedNodeNames(initialVectorInfoPointer);
+				postNodeNamesMessage(orderedNodeNamesFromLatestInit);
+				return 0;
+			},
+			'iiii');
+	const backgroundThreadRunningCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
+			function publishBackgroundThreadRunningState(isNowRunning, libraryInstanceId, userDataPointer) {
+				postRunningStateChangedMessage(Boolean(isNowRunning));
+				return 0;
+			},
+			'iiii');
+	const initReturnCode = ngspiceWebAssemblyModule._ngSpice_Init(
+			sendCharCallbackFunctionPointer,
+			sendStatCallbackFunctionPointer,
+			controlledExitCallbackFunctionPointer,
+			sendDataCallbackFunctionPointer,
+			sendInitDataCallbackFunctionPointer,
+			backgroundThreadRunningCallbackFunctionPointer,
+			0);
+	if (initReturnCode !== 0) {
+		throw new Error('ngSpice_Init returned ' + initReturnCode);
+	}
 }
 
 function provideFakeProcMeminfoSoNgspiceDoesNotAbort() {
-	// ngspice reads /proc/meminfo on startup to size its output buffers;
-	// without it the run aborts with "Setting the output memory is not
-	// possible." A reasonable lie keeps the simulator happy.
-	const fakeProcMeminfoText = [
-		'MemTotal:        1048576 kB',
-		'MemFree:         1048576 kB',
-		'MemAvailable:    1048576 kB',
-		'',
-	].join('\n');
-	self.Module.FS.mkdirTree('/proc');
-	self.Module.FS.writeFile('/proc/meminfo', fakeProcMeminfoText);
+	ngspiceWebAssemblyModule.FS.mkdirTree('/proc');
+	ngspiceWebAssemblyModule.FS.writeFile('/proc/meminfo', FAKE_PROC_MEMINFO_TEXT_FOR_NGSPICE_BUFFER_SIZING);
 }
 
-function runNgspiceInBatchMode(virtualNetlistPath) {
-	let exitStatus = 0;
-	try {
-		self.Module.callMain(['-b', virtualNetlistPath]);
-	} catch (ngspiceInvocationError) {
-		exitStatus = -1;
-		captured_stderr_lines_during_current_invocation.push(
-				'callMain threw: ' + ngspiceInvocationError.message);
+function feedNetlistLinesIntoNgspice(netlistLines) {
+	for (const oneLine of netlistLines) {
+		ngspiceSendCommand('circbyline ' + String(oneLine));
 	}
-	return exitStatus;
-}
-
-function runSmokeTestAfterModuleReady() {
-	provideFakeProcMeminfoSoNgspiceDoesNotAbort();
-	const smokeTestNetlistPath = '/spice3d_smoke_test.cir';
-	writeFileIntoEmscriptenVirtualFileSystem(smokeTestNetlistPath, SMOKE_TEST_NETLIST_TEXT);
-	const exitStatus = runNgspiceInBatchMode(smokeTestNetlistPath);
-	const smokeStdout = takeCapturedStdoutText();
-	const smokeStderr = takeCapturedStderrText();
-	postSmokeTestRanMessage(smokeStdout, smokeStderr, exitStatus);
-	postWorkerReadyMessage(smokeStdout, smokeStderr);
 }
 
 function handleLoadNetlistMessage(incomingMessage) {
-	const netlistText = (incomingMessage.netlistLines || []).join('\n') + '\n';
-	writeFileIntoEmscriptenVirtualFileSystem('/spice3d_input.cir', netlistText);
+	feedNetlistLinesIntoNgspice(incomingMessage.netlistLines || []);
 }
 
 function handleStartTransientMessage(incomingMessage) {
-	const exitStatus = runNgspiceInBatchMode('/spice3d_input.cir');
-	self.postMessage({
-		messageKind: 'simulationOutputText',
-		stdoutText: takeCapturedStdoutText(),
-		stderrText: takeCapturedStderrText(),
-		exitStatus: exitStatus,
-	});
+	const transientCommand = 'tran '
+			+ Number(incomingMessage.timestepSeconds) + ' '
+			+ Number(incomingMessage.stopTimeSeconds);
+	ngspiceSendCommand(transientCommand);
+	ngspiceSendCommand('bg_run');
+}
+
+function handleHaltMessage() {
+	ngspiceSendCommand('bg_halt');
+}
+
+function handleExternalVoltageMessage(incomingMessage) {
+	const alterCommand = 'alter v.'
+			+ String(incomingMessage.sourceName)
+			+ ' dc ' + Number(incomingMessage.volts);
+	ngspiceSendCommand(alterCommand);
 }
 
 self.addEventListener('message', function handleHostMessage(messageEvent) {
 	const incomingMessage = messageEvent.data || {};
-	if (!self.Module || typeof self.Module.callMain !== 'function') {
+	if (!ngspiceWebAssemblyModule) {
 		postWorkerErrorMessage('ngspice module not yet ready');
 		return;
 	}
 	switch (incomingMessage.messageKind) {
-		case 'loadNetlist':
-			handleLoadNetlistMessage(incomingMessage);
-			break;
-		case 'startTransient':
-			handleStartTransientMessage(incomingMessage);
-			break;
-		case 'halt':
-		case 'externalVoltage':
-			// Not meaningful for the CLI driver; ignore until sharedspice
-			// is wired in.
-			break;
+		case 'loadNetlist':         handleLoadNetlistMessage(incomingMessage); break;
+		case 'startTransient':      handleStartTransientMessage(incomingMessage); break;
+		case 'halt':                handleHaltMessage(); break;
+		case 'externalVoltage':     handleExternalVoltageMessage(incomingMessage); break;
 		default:
 			postWorkerErrorMessage('unknown messageKind: ' + incomingMessage.messageKind);
 	}
 });
 
-emscriptenModuleOptions.onRuntimeInitialized = function whenNgspiceWasmReady() {
+createNgspiceModule({
+	locateFile: function locateNgspiceWasm(relativeFileName) { return relativeFileName; },
+	print: function discardModuleStdout(textLine) {},
+	printErr: function discardModuleStderr(textLine) {},
+}).then(function onNgspiceModuleReady(moduleInstance) {
+	ngspiceWebAssemblyModule = moduleInstance;
+	ngspiceSendCommand = ngspiceWebAssemblyModule.cwrap('ngSpice_Command', 'number', ['string']);
 	try {
-		runSmokeTestAfterModuleReady();
-	} catch (smokeTestError) {
-		postWorkerErrorMessage('smoke test threw: ' + smokeTestError.message);
+		provideFakeProcMeminfoSoNgspiceDoesNotAbort();
+		registerSharedspiceCallbacksWithNgspice();
+	} catch (ngspiceInitError) {
+		postWorkerErrorMessage('ngspice init failed: ' + ngspiceInitError.message);
+		return;
 	}
-};
-
-self.Module = emscriptenModuleOptions;
-try {
-	importScripts('ngspice.js');
-} catch (ngspiceScriptLoadError) {
-	postWorkerErrorMessage('importScripts(ngspice.js) failed: ' + ngspiceScriptLoadError.message);
-}
+	postWorkerReadyMessage();
+}).catch(function onNgspiceModuleLoadFailed(moduleLoadError) {
+	postWorkerErrorMessage('ngspice module failed to load: ' + (moduleLoadError && moduleLoadError.message));
+});
