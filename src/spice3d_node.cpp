@@ -1134,8 +1134,9 @@ void update_one_wire_mesh_albedo_from_voltage(
 		godot::MeshInstance3D *wire_mesh_instance,
 		const godot::Dictionary &spice_node_name_to_voltage,
 		double vdd_volts) {
+	if (!wire_mesh_instance->has_meta(WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME)) return;
 	const godot::Variant meta_value = wire_mesh_instance->get_meta(
-			WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME, godot::Variant());
+			WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME);
 	if (meta_value.get_type() != godot::Variant::STRING) return;
 	const godot::String spice_node_name = static_cast<godot::String>(meta_value);
 	if (!spice_node_name_to_voltage.has(spice_node_name)) return;

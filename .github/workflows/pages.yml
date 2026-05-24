@@ -154,11 +154,8 @@ jobs:
             exit 1
           fi
 
-      - name: Run GUT headless unit tests
-        run: |
-          set -euo pipefail
-          cd project
-          godot --headless -s addons/gut/gut_cmdln.gd -gdir=res://test/unit -gexit
+      - name: Run GUT headless unit tests (strict — fails on any ERROR: line)
+        run: scripts/run-godot-tests-strict.sh
 
       - name: Web export
         run: |

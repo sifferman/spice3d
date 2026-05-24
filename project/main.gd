@@ -66,6 +66,7 @@ const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.1
 var pressed_button_high_state_by_instance_name: Dictionary = {}
 var spice3d_root_node_for_sample_polling: Node = null
 var simulation_sample_poll_accumulator_seconds := 0.0
+var has_logged_first_simulation_sample_node_names := false
 
 
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
@@ -108,9 +109,13 @@ func _process(delta_seconds_since_last_frame: float) -> void:
 	var most_recent_sample = drained_samples[drained_samples.size() - 1]
 	if not (most_recent_sample is Dictionary) or not most_recent_sample.has("nodeVoltagesByName"):
 		return
+	var node_voltages_by_name: Dictionary = most_recent_sample["nodeVoltagesByName"]
+	if not has_logged_first_simulation_sample_node_names:
+		print("[spice3d] first sample node names: %s" % str(node_voltages_by_name.keys()))
+		has_logged_first_simulation_sample_node_names = true
 	spice3d_root_node_for_sample_polling.apply_node_voltages_to_wire_colors(
 			schematic_view,
-			most_recent_sample["nodeVoltagesByName"],
+			node_voltages_by_name,
 			VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL)
 
 
