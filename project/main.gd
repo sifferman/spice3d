@@ -3,11 +3,11 @@ extends Node3D
 @onready var schematic_view: Node3D = $SchematicView
 @onready var status_label: Label = $StatusOverlay/StatusLabel
 
-const ACTIVE_EXAMPLE_DIRECTORY_NAME := "inverter"
+const ACTIVE_EXAMPLE_DIRECTORY_NAME := "button"
 const SCHEMATIC_BUNDLED_DIR := "res://examples/" + ACTIVE_EXAMPLE_DIRECTORY_NAME
 const SCHEMATIC_STAGED_DIR := "user://examples/" + ACTIVE_EXAMPLE_DIRECTORY_NAME
-const SCHEMATIC_BUNDLED_FILE_NAMES := ["sky130_fd_sc_hd__inv_1.sch"]
-const TOP_SCHEMATIC_FILE_NAME := "sky130_fd_sc_hd__inv_1.sch"
+const SCHEMATIC_BUNDLED_FILE_NAMES := ["button_test.sch", "button.sym"]
+const TOP_SCHEMATIC_FILE_NAME := "button_test.sch"
 
 const XSCHEM_UPSTREAM_GIT_SHA := "d7f3980301eb9f12954a8542d55b188ffe851770"
 const XSCHEM_JSDELIVR_FILE_LISTING_URL := \
