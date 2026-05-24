@@ -23,10 +23,7 @@ trap 'rm -f "$scratch_netlist_file"' EXIT
 cat > "$scratch_netlist_file" <<EOF
 spice3d testbench shape that main.gd produces
 .lib $PDK_ROOT/sky130A/libs.tech/combined/sky130.lib.spice tt
-.subckt sky130_fd_sc_hd__inv_1 A VGND VNB VPB VPWR Y
-X0 VGND A Y VNB sky130_fd_pr__nfet_01v8 w=650000u l=150000u
-X1 Y A VPWR VPB sky130_fd_pr__pfet_01v8_hvt w=1e+06u l=150000u
-.ends
+.include $PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice
 V_SPICE3D_TESTBENCH_VPWR VPWR 0 DC 1.8
 V_SPICE3D_TESTBENCH_VGND VGND 0 DC 0
 V_SPICE3D_TESTBENCH_VPB  VPB  0 DC 1.8

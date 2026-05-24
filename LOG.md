@@ -6,6 +6,49 @@ description of [#1](https://github.com/sifferman/spice3d/pull/1).
 
 ---
 
+## 2026-05-23 — Streaming zstd→tar extractor; full sky130_fd_sc_hd archive now fits
+
+The wasm 2 GB heap couldn't decompress the full 122 MB
+`sky130_fd_sc_hd.tar.zst` (uncompressed ≈ 835 MB) into a single buffer,
+which forced me earlier to drop the archive from the fetch list and
+inline a hand-typed `sky130_fd_sc_hd__inv_1` subckt in `main.gd` as a
+workaround.
+
+`src/pdk/zstd_tar_archive_extractor.cpp` now decompresses one
+`ZSTD_DStreamOutSize()` chunk at a time and feeds bytes through a tiny
+streaming tar state machine
+(`StreamingTarFromDecompressedBytesConsumer`) with a 512-byte
+pending-header buffer plus per-entry body / padding counters and an
+open `FILE*` for the entry currently being written. Filtered entries
+get an `fopen`/`fwrite`/`fclose` per chunk; non-matching entries skip
+straight through with no heap allocation. Peak RSS on the big
+stdcell archive: 130 MB (was OOM).
+
+Subtle bug that took the longest to find: when a body finished
+mid-call with `padding_remaining == 0`, the function returned the
+body bytes but didn't flip `currently_parsing_header_block_`. The
+*next* call saw `body=0, padding=0` and returned `0`, which the outer
+feed loop interpreted as "no progress" and gave up. Fix: detect the
+end-of-body case inline and transition straight back to header-parse
+mode in the same call.
+
+With streaming working, `sky130_fd_sc_hd.tar.zst` is back in the
+startup fetch list and the keep-substring filter restricts the
+extracted payload to just `spice/sky130_fd_sc_hd.spice` (~905 KB, the
+consolidated subckt file that contains every stdcell). `main.gd`
+`.include`s that file in the testbench instead of inlining
+`sky130_fd_sc_hd__inv_1` by hand, so any stdcell xschem references
+will resolve from the real PDK source. The local-ngspice testbench
+script (`scripts/test-button-test-netlist-against-real-ngspice.sh`)
+was updated to the same shape and still passes the inversion check.
+
+`test_netlist_transformer.gd` was updated to assert that the
+testbench contains a `.include` of the consolidated stdcell spice
+file and that *no* `.ends` survives in the converted top-level
+testbench (the inline subckt was the only thing contributing one).
+
+---
+
 ## 2026-05-23 — Buttons drive ngspice via alter; wire colors animate from samples
 
 End-to-end interactive loop. Clicking the button on the loaded
