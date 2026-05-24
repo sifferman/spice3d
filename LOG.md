@@ -6,6 +6,38 @@ description of [#1](https://github.com/sifferman/spice3d/pull/1).
 
 ---
 
+## 2026-05-23 — Drop sky130_fd_sc_hd.tar.zst download; bundle the one file we need
+
+The full sky130_fd_sc_hd archive is 127 MB compressed (~835 MB
+uncompressed) and we only need the consolidated subckt file
+`sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice`
+(905 KB). Downloading the archive on every page load took
+~90 seconds via the CORS-proxy worker.
+
+Committed the single needed file at
+`project/sky130_pdk_bundled/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice`.
+Dropped `sky130_fd_sc_hd.tar.zst` from the fetch list and the
+substring filter list in `main.gd`, dropped the corresponding
+walk subdirectory from `SKY130_PDK_SOURCE_SUBDIRECTORIES_RELATIVE_TO_CIEL_ROOT`,
+and added a new `SKY130_PDK_RES_BUNDLED_FILES_TO_STAGE_INTO_WORKER_FILESYSTEM`
+list with a helper `stage_one_res_bundled_file_into_worker_filesystem`
+that reads each bundled file via `FileAccess.open("res://...")`
+and pushes it into the worker MEMFS at the same virtual path
+the ngspice `.include` line expects.
+
+Also extended `project/export_presets.cfg`'s `include_filter`
+from `*.sch,*.sym` to `*.sch,*.sym,*.spice` so the web export
+actually ships the bundled file — without this the export
+would have stripped it and `FileAccess.open` would have failed
+on the deployed page.
+
+The streaming PaxHeader-aware extractor remains in place
+(it's still wired up for fd_pr), so this is purely a deferred
+fetch — the architecture supports re-enabling the full
+download later when we want all stdcells.
+
+---
+
 ## 2026-05-23 — PaxHeader-aware tar extraction; long PDK filenames no longer truncated
 
 The deployed page surfaced
