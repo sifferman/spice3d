@@ -6,6 +6,45 @@ description of [#1](https://github.com/sifferman/spice3d/pull/1).
 
 ---
 
+## 2026-05-24 — Chunked tran/cont so `alter` actually takes effect mid-run
+
+After surfacing SendChar diagnostics + speeding up the timestep,
+the deployed inverter was still showing `net1=0, btn_out_n=1.8`
+*regardless of button clicks*. Voltage-change-triggered diagnostic
+only logged the initial 3 unconditional samples and then went
+silent for the whole run, meaning every `alter v.vbutton1 dc 1.8`
+posted from the bridge had zero effect.
+
+Root cause: the wasm ngspice in `third_party/ngspice` is built
+without `--enable-pthreads` (no flag passed in
+`scripts/build-ngspice-for-emscripten.sh`). So
+`ngSpice_Command("bg_run")` is not actually background — it runs
+the whole transient synchronously inside the worker. While bg_run
+is iterating timesteps, the worker's `onmessage` handler is
+blocked, and every `externalVoltage` message piles up in the
+queue forever. SendData fires fine because it's called
+synchronously from inside the solver and forwards via
+`postMessage`.
+
+`project/web/ngspice_worker.js` no longer uses `bg_run`. The
+`startTransient` handler now drives a chunked loop: issue
+`tran <step> <chunk_stop>` + `run` for the first 100 ms of
+simulated time, then a `setTimeout(0)`-scheduled callback
+extends the stop time by another chunk and issues
+`cont <new_stop>`. Each chunk runs synchronously, then yields
+to the message loop so any queued `alter` from a button click
+applies, then `cont`s. Manual
+`postRunningStateChangedMessage(true/false)` calls bracket the
+loop since the sharedspice BGThreadRunning callback never fires
+in non-threaded mode.
+
+Saved as a memory at
+`feedback_wasm_ngspice_single_threaded.md` so a future me
+doesn't try to reach for `bg_run` again expecting actual
+background execution.
+
+---
+
 ## 2026-05-23 — Drop sky130_fd_sc_hd.tar.zst download; bundle the one file we need
 
 The full sky130_fd_sc_hd archive is 127 MB compressed (~835 MB

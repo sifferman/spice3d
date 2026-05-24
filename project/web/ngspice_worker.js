@@ -159,12 +159,44 @@ function handleLoadNetlistMessage(incomingMessage) {
 	ngspiceSendCommand('save none');
 }
 
+const SIMULATION_CHUNK_DURATION_IN_SIMULATED_SECONDS = 0.1;
+
+let chunkedSimulationIsRunning = false;
+let chunkedSimulationTimestepInSeconds = 0;
+let chunkedSimulationFinalStopTimeInSeconds = 0;
+let chunkedSimulationAccumulatedStopTimeInSeconds = 0;
+
 function handleStartTransientMessage(incomingMessage) {
-	const transientCommand = 'tran '
-			+ Number(incomingMessage.timestepSeconds) + ' '
-			+ Number(incomingMessage.stopTimeSeconds);
-	ngspiceSendCommand(transientCommand);
-	ngspiceSendCommand('bg_run');
+	chunkedSimulationTimestepInSeconds = Number(incomingMessage.timestepSeconds);
+	chunkedSimulationFinalStopTimeInSeconds = Number(incomingMessage.stopTimeSeconds);
+	chunkedSimulationAccumulatedStopTimeInSeconds = Math.min(
+			SIMULATION_CHUNK_DURATION_IN_SIMULATED_SECONDS,
+			chunkedSimulationFinalStopTimeInSeconds);
+	ngspiceSendCommand('tran '
+			+ chunkedSimulationTimestepInSeconds + ' '
+			+ chunkedSimulationAccumulatedStopTimeInSeconds);
+	ngspiceSendCommand('run');
+	chunkedSimulationIsRunning = true;
+	postRunningStateChangedMessage(true);
+	scheduleNextChunkedSimulationContinuation();
+}
+
+function scheduleNextChunkedSimulationContinuation() {
+	setTimeout(stepChunkedSimulationOneChunkForward, 0);
+}
+
+function stepChunkedSimulationOneChunkForward() {
+	if (!chunkedSimulationIsRunning) return;
+	if (chunkedSimulationAccumulatedStopTimeInSeconds >= chunkedSimulationFinalStopTimeInSeconds) {
+		chunkedSimulationIsRunning = false;
+		postRunningStateChangedMessage(false);
+		return;
+	}
+	chunkedSimulationAccumulatedStopTimeInSeconds = Math.min(
+			chunkedSimulationAccumulatedStopTimeInSeconds + SIMULATION_CHUNK_DURATION_IN_SIMULATED_SECONDS,
+			chunkedSimulationFinalStopTimeInSeconds);
+	ngspiceSendCommand('cont ' + chunkedSimulationAccumulatedStopTimeInSeconds);
+	scheduleNextChunkedSimulationContinuation();
 }
 
 function handleInstallFileTextMessage(incomingMessage) {
@@ -195,7 +227,8 @@ function handleSetSampleThrottleMessage(incomingMessage) {
 }
 
 function handleHaltMessage() {
-	ngspiceSendCommand('bg_halt');
+	chunkedSimulationIsRunning = false;
+	postRunningStateChangedMessage(false);
 }
 
 function handleExternalVoltageMessage(incomingMessage) {
