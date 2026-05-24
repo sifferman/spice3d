@@ -39,6 +39,15 @@ public:
 			const godot::String &schematic_file_path,
 			const godot::String &xschemrc_file_path,
 			const godot::PackedStringArray &extra_symbol_search_directories);
+	godot::PackedStringArray generate_spice_netlist_for_schematic_file(
+			const godot::String &schematic_file_path,
+			const godot::String &xschemrc_file_path,
+			const godot::PackedStringArray &extra_symbol_search_directories);
+	bool push_netlist_lines_to_web_simulator(const godot::PackedStringArray &netlist_lines);
+	bool start_transient_analysis_on_web_simulator(double timestep_seconds, double stop_time_seconds);
+	void halt_simulation_on_web_simulator();
+	void set_external_voltage_source_on_web_simulator(const godot::String &source_name, double volts);
+	godot::Array drain_buffered_simulation_samples_from_web_simulator();
 	godot::Dictionary extract_zstd_tar_archive_filtered_by_path_substring(
 			const godot::PackedByteArray &compressed_tar_zst_bytes,
 			const godot::String &filesystem_output_directory_absolute_path,

@@ -52,9 +52,20 @@ func _ready() -> void:
 			"",
 			extra_symbol_search_directories)
 	update_status_text(spice3d_root_node, loaded_schematic)
+	push_spice_netlist_and_start_transient_on_web_simulator(
+			spice3d_root_node,
+			staged_top_schematic_absolute_path,
+			extra_symbol_search_directories)
 
+
+const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
+const TRANSIENT_TIMESTEP_SECONDS := 5.0e-9
+const TRANSIENT_STOP_TIME_SECONDS := 5.0e-6
+const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.1
 
 var pressed_button_high_state_by_instance_name: Dictionary = {}
+var spice3d_root_node_for_sample_polling: Node = null
+var simulation_sample_poll_accumulator_seconds := 0.0
 
 
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
@@ -62,6 +73,40 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	var new_high_state := not previously_high_state
 	pressed_button_high_state_by_instance_name[button_instance_name] = new_high_state
 	print("[spice3d] button '%s' toggled %s" % [button_instance_name, "HIGH" if new_high_state else "LOW"])
+	if spice3d_root_node_for_sample_polling != null:
+		var new_voltage_for_button := VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL if new_high_state else 0.0
+		spice3d_root_node_for_sample_polling.set_external_voltage_source_on_web_simulator(
+				button_instance_name, new_voltage_for_button)
+
+
+func push_spice_netlist_and_start_transient_on_web_simulator(
+		spice3d_root_node: Node,
+		staged_top_schematic_absolute_path: String,
+		extra_symbol_search_directories: PackedStringArray) -> void:
+	spice3d_root_node_for_sample_polling = spice3d_root_node
+	var netlist_lines := spice3d_root_node.generate_spice_netlist_for_schematic_file(
+			staged_top_schematic_absolute_path, "", extra_symbol_search_directories)
+	if netlist_lines.is_empty():
+		push_warning("[spice3d] netlist empty; skipping simulator push")
+		return
+	print("[spice3d] generated netlist with %d lines" % netlist_lines.size())
+	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines)
+	spice3d_root_node.start_transient_analysis_on_web_simulator(
+			TRANSIENT_TIMESTEP_SECONDS, TRANSIENT_STOP_TIME_SECONDS)
+
+
+func _process(delta_seconds_since_last_frame: float) -> void:
+	if spice3d_root_node_for_sample_polling == null:
+		return
+	simulation_sample_poll_accumulator_seconds += delta_seconds_since_last_frame
+	if simulation_sample_poll_accumulator_seconds < SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS:
+		return
+	simulation_sample_poll_accumulator_seconds = 0.0
+	var drained_samples: Array = spice3d_root_node_for_sample_polling.drain_buffered_simulation_samples_from_web_simulator()
+	if drained_samples.is_empty():
+		return
+	var most_recent_sample = drained_samples[drained_samples.size() - 1]
+	print("[spice3d] latest sample: %s" % most_recent_sample)
 
 
 func resolve_latest_sky130_ciel_version_from_manifest_with_fallback() -> String:
