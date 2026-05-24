@@ -1,0 +1,226 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Stuck at 4.4.1 because Godot 4.5 introduced godot#111645:
+  # https://github.com/godotengine/godot/issues/111645
+  GODOT_VERSION: 4.4.1
+  GODOT_STATUS: stable
+  COI_SERVICEWORKER_GIT_SHA: 7b1d2a092d0d2dd2b7270b6f12f13605de26f214
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Resolve godot-cpp submodule sha
+        id: godot_cpp_submodule_sha
+        run: echo "sha=$(git -C godot-cpp rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Linux must build before the web setup activates emsdk, or
+      # PATH pollution breaks the native compile.
+      - name: Setup godot-cpp toolchain (linux)
+        uses: ./godot-cpp/.github/actions/setup-godot-cpp
+        with:
+          platform: linux
+
+      - name: Restore SCons cache (linux)
+        uses: ./godot-cpp/.github/actions/godot-cache-restore
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache-linux/
+          cache-name: linux_x86_64_single_template_debug
+
+      - name: Build GDExtension (linux template_debug, host-side only)
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache-linux/
+        run: |
+          scons -j"$(nproc)" target=template_debug platform=linux arch=x86_64 precision=single
+
+      - name: Save SCons cache (linux)
+        uses: ./godot-cpp/.github/actions/godot-cache-save
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache-linux/
+          cache-name: linux_x86_64_single_template_debug
+
+      - name: Setup godot-cpp toolchain (web, adds emsdk)
+        uses: ./godot-cpp/.github/actions/setup-godot-cpp
+        with:
+          platform: web
+          em-version: 3.1.62
+
+      - name: Install ngspice build prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
+
+      - name: Cache ngspice emscripten build
+        id: cache_ngspice_emscripten_build
+        uses: actions/cache@v4
+        with:
+          path: third_party/ngspice/build-emscripten
+          key: ngspice-emscripten-${{ hashFiles('scripts/build-ngspice-for-emscripten.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+
+      - name: Build ngspice for emscripten
+        if: steps.cache_ngspice_emscripten_build.outputs.cache-hit != 'true'
+        run: scripts/build-ngspice-for-emscripten.sh
+
+      - name: Restore SCons cache (web)
+        uses: ./godot-cpp/.github/actions/godot-cache-restore
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache-web/
+          cache-name: web_wasm32_single_nothreads_template_release
+
+      - name: Build GDExtension (web, template_release, nothreads)
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache-web/
+        run: |
+          scons -j"$(nproc)" target=template_release platform=web arch=wasm32 precision=single threads=no
+
+      - name: Save SCons cache (web)
+        uses: ./godot-cpp/.github/actions/godot-cache-save
+        with:
+          scons-cache: ${{ github.workspace }}/.scons-cache-web/
+          cache-name: web_wasm32_single_nothreads_template_release
+
+      - name: Verify GDExtension binaries are in place
+        run: |
+          set -euo pipefail
+          echo "=== project/bin contents ==="
+          ls -lR project/bin || true
+          test -f project/bin/web/libspice3d.web.template_release.wasm32.nothreads.wasm
+          test -f project/bin/linux/libspice3d.linux.template_debug.x86_64.so
+
+      - name: Cache Godot editor binary and export templates
+        id: cache_godot_editor_and_templates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.${{ env.GODOT_STATUS }}
+          key: godot-editor-and-templates-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+
+      - name: Install Godot ${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+        if: steps.cache_godot_editor_and_templates.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          ver=${GODOT_VERSION}-${GODOT_STATUS}
+          base="https://github.com/godotengine/godot/releases/download/${ver}"
+          curl -fsSL "${base}/Godot_v${ver}_linux.x86_64.zip" -o godot.zip
+          unzip -q godot.zip
+          mv "Godot_v${ver}_linux.x86_64" "$HOME/godot"
+          chmod +x "$HOME/godot"
+
+          curl -fsSL "${base}/Godot_v${ver}_export_templates.tpz" -o templates.tpz
+          tpl_dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
+          mkdir -p "$tpl_dir"
+          unzip -q templates.tpz
+          mv templates/* "$tpl_dir/"
+
+      - name: Put Godot on PATH
+        run: |
+          chmod +x "$HOME/godot"
+          echo "$HOME" >> "$GITHUB_PATH"
+          "$HOME/godot" --version
+
+      - name: Import project so `.godot/` is generated
+        run: |
+          set -euo pipefail
+          cd project
+          godot --headless --import || true
+          godot --headless --import
+
+      - name: Web export
+        run: |
+          set -euo pipefail
+          mkdir -p build-web
+          cd project
+          godot --headless --export-release "Web" ../build-web/index.html
+          ls -la ../build-web
+
+      - name: Add coi-serviceworker (cross-origin isolation on GitHub Pages)
+        run: |
+          set -euo pipefail
+          url="https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/${COI_SERVICEWORKER_GIT_SHA}/coi-serviceworker.js"
+          curl -fsSL "$url" -o build-web/coi-serviceworker.js
+
+          # Inject <script src="coi-serviceworker.js"> into the head of
+          # Godot's exported index.html. Idempotent.
+          python3 - <<'PY'
+          from pathlib import Path
+          exported_index_html_path = Path('build-web/index.html')
+          exported_html = exported_index_html_path.read_text()
+          coi_serviceworker_script_tag = '<script src="coi-serviceworker.js"></script>'
+          if coi_serviceworker_script_tag in exported_html:
+              print('coi-serviceworker script tag already present, leaving alone')
+          else:
+              html_with_script_tag = exported_html.replace(
+                  '<head>',
+                  '<head>\n\t' + coi_serviceworker_script_tag,
+                  1,
+              )
+              exported_index_html_path.write_text(html_with_script_tag)
+              print('injected coi-serviceworker script tag into index.html')
+          PY
+
+      - name: Copy ngspice bridge + worker JS into the export
+        run: cp project/web/*.js build-web/
+
+      - name: Copy ngspice wasm artifacts into the export
+        run: |
+          set -euo pipefail
+          cp third_party/ngspice/build-emscripten/ngspice.js build-web/
+          cp third_party/ngspice/build-emscripten/ngspice.wasm build-web/
+
+      - name: Inject ngspice_bridge.js into exported index.html
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          exported_index_html_path = Path('build-web/index.html')
+          exported_html = exported_index_html_path.read_text()
+          ngspice_bridge_script_tag = '<script src="ngspice_bridge.js"></script>'
+          if ngspice_bridge_script_tag in exported_html:
+              print('ngspice_bridge.js script tag already present, leaving alone')
+          else:
+              html_with_script_tag = exported_html.replace(
+                  '<head>',
+                  '<head>\n\t' + ngspice_bridge_script_tag,
+                  1,
+              )
+              exported_index_html_path.write_text(html_with_script_tag)
+              print('injected ngspice_bridge.js script tag into index.html')
+          PY
+
+      - name: Add .nojekyll
+        run: touch build-web/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build-web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

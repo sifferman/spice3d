@@ -1,4 +1,12 @@
 [submodule "godot-cpp"]
 	path = godot-cpp
 	url = https://github.com/godotengine/godot-cpp.git
-	branch = 4.3
+[submodule "third_party/xschem2spice"]
+	path = third_party/xschem2spice
+	url = https://github.com/sifferman/xschem2spice.git
+[submodule "third_party/zstd"]
+	path = third_party/zstd
+	url = https://github.com/facebook/zstd.git
+[submodule "third_party/ngspice"]
+	path = third_party/ngspice
+	url = https://git.code.sf.net/p/ngspice/ngspice

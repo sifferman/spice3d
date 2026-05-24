@@ -60,3 +60,19 @@ compile_commands.json
 # Cmake
 cmake-build*
 CMakeUserPresets.json
+
+# Standalone test binary + build-web export
+test/test_schematic_loader
+build-web/
+
+# Claude Code session state
+.claude/
+
+# Cloudflare Wrangler local state (auth cache, build outputs)
+infra/cors-proxy/.wrangler/
+infra/cors-proxy/node_modules/
+
+# xschem2spice's own Makefile build outputs (when invoked directly)
+third_party/xschem2spice/libxschem2spice.a
+third_party/xschem2spice/xschem2spice
+third_party/xschem2spice/*.wasm
