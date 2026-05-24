@@ -6,6 +6,86 @@ description of [#1](https://github.com/sifferman/spice3d/pull/1).
 
 ---
 
+## 2026-05-23 — Buttons drive ngspice via alter; wire colors animate from samples
+
+End-to-end interactive loop. Clicking the button on the loaded
+schematic toggles V_VBUTTON1 between 0 V and VDD; ngspice in the
+worker re-stabilises the transient; samples stream back via the
+SendData callback and update wire colors in real time.
+
+### C++ side
+
+`Spice3DNode` gained five web-simulator helpers (all no-ops on
+native):
+
+- `generate_spice_netlist_for_schematic_file()` — wraps the new
+  `schematic_loader::generate_spice_netlist_text_from_schematic_file()`
+  which calls `xs_netlister_emit_spice()` into a `std::tmpfile()`
+  buffer (was `open_memstream`, but that's POSIX-only and broke
+  the Windows CI matrix). Returns `PackedStringArray` of lines.
+- `push_netlist_lines_to_web_simulator(lines)` —
+  `JavaScriptBridge::eval` `globalThis.spice3d.loadNetlistLines(json)`.
+- `start_transient_analysis_on_web_simulator(step, stop)` —
+  `globalThis.spice3d.startTransientAnalysis(...)`.
+- `halt_simulation_on_web_simulator()` — `stopSimulation()`.
+- `set_external_voltage_source_on_web_simulator(name, volts)` —
+  `setExternalVoltageSource(name, volts)`.
+- `drain_buffered_simulation_samples_from_web_simulator()` —
+  `JavaScriptBridge::eval("JSON.stringify(...takeBufferedSimulationSamples())")`
+  then `JSON.parse_string()` to a Godot `Array`.
+
+Wire rendering switched from a single shared material to a
+per-instance `StandardMaterial3D` so each wire's albedo can be
+animated independently. Each wire MeshInstance3D carries the
+SPICE node name in its meta dictionary (xschem net label
+normalised: leading `#` stripped, lowercased).
+
+New `apply_node_voltages_to_wire_colors(root, voltagesByName, vdd)`
+walks the schematic root, looks up each wire's tagged node name
+in the dictionary, and lerps its albedo between a low colour
+(blue) and a high colour (warm yellow) by voltage / VDD.
+
+### Bridge + worker
+
+Bridge's `handleWorkerMessage` decorates every incoming
+`SendData` sample with a `nodeVoltagesByName` dict (built from
+`this.nodeNames` captured on `SendInitData`) before queuing it
+in `bufferedSimulationSamples`. GDScript drains the buffer with
+ready-to-use voltage maps — no parallel-array re-indexing.
+
+### main.gd
+
+After the schematic loads:
+1. Generate the netlist, push it to the worker, start a 5 ns / 5 µs
+   transient.
+2. `_process()` every 100 ms drains buffered samples and feeds the
+   most recent `nodeVoltagesByName` into
+   `apply_node_voltages_to_wire_colors`.
+3. On `button_pressed(instance_name)`, toggle the per-button
+   high/low state and send
+   `set_external_voltage_source_on_web_simulator(name, 0 or VDD)`.
+
+### Tests
+
+GUT button-signal tests (5) still cover left/right/release/key
+event filtering. The Node-level `scripts/test-ngspice-wasm.js`
+covers the sharedspice path end-to-end. 9/9 GUT tests pass
+headless under Godot 4.4.1.
+
+### godot-cpp gotcha: no namespace-scope `godot::String` constants
+
+A `const godot::String WIRE_META_KEY = godot::String("…")` at file
+scope crashed Godot during "Verifying GDExtensions" with a stack
+that showed only `libc.so.6 +0x42520`. Cause: godot-cpp wrapper
+types call into the GDExtension interface table during
+construction, but namespace-scope globals run BEFORE the
+`entry_symbol` is called, so the interface table isn't installed
+yet. Fixed by switching the key to `const char *`; equivalent
+constraint applies to `godot::Variant` / `godot::Dictionary` /
+`godot::Color` constants anywhere outside function bodies.
+
+---
+
 ## 2026-05-23 — libngspice sharedspice (ngshared) now builds for wasm
 
 The libtool spike succeeded. ngspice's `--with-ngshared` flag (which
