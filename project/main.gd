@@ -84,7 +84,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		staged_top_schematic_absolute_path: String,
 		extra_symbol_search_directories: PackedStringArray) -> void:
 	spice3d_root_node_for_sample_polling = spice3d_root_node
-	var netlist_lines := spice3d_root_node.generate_spice_netlist_for_schematic_file(
+	var netlist_lines: PackedStringArray = spice3d_root_node.generate_spice_netlist_for_schematic_file(
 			staged_top_schematic_absolute_path, "", extra_symbol_search_directories)
 	if netlist_lines.is_empty():
 		push_warning("[spice3d] netlist empty; skipping simulator push")

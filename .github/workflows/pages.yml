@@ -148,7 +148,11 @@ jobs:
           set -euo pipefail
           cd project
           godot --headless --import || true
-          godot --headless --import
+          godot --headless --import 2>&1 | tee import_log.txt
+          if grep -E "(SCRIPT ERROR|Parse Error|Failed to load script)" import_log.txt; then
+            echo "Import surfaced GDScript parse/load errors — failing." >&2
+            exit 1
+          fi
 
       - name: Run GUT headless unit tests
         run: |
