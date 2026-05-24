@@ -154,7 +154,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run GUT headless unit tests (strict — fails on any ERROR: line)
+      - name: "Run GUT headless unit tests (strict; fails on any ERROR line)"
         run: scripts/run-godot-tests-strict.sh
 
       - name: Web export
