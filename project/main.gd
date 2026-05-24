@@ -66,10 +66,11 @@ func _ready() -> void:
 
 
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
-const TRANSIENT_TIMESTEP_SECONDS := 1.0e-6
+const TRANSIENT_TIMESTEP_SECONDS := 1.0e-3
 const TRANSIENT_STOP_TIME_SECONDS_EFFECTIVELY_FOREVER := 1.0e6
 const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.1
 const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 30.0
+const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 5
 
 const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
 const SKY130_PDK_LIB_CORNER_NAME := "tt"
@@ -85,6 +86,8 @@ var pressed_button_high_state_by_instance_name: Dictionary = {}
 var spice3d_root_node_for_sample_polling: Node = null
 var simulation_sample_poll_accumulator_seconds := 0.0
 var has_logged_first_simulation_sample_node_names := false
+var remaining_initial_samples_to_log_key_voltages_for := NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR
+var wire_color_apply_invocation_count := 0
 
 
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
@@ -242,10 +245,30 @@ func _process(delta_seconds_since_last_frame: float) -> void:
 	if not has_logged_first_simulation_sample_node_names:
 		print("[spice3d] first sample node names: %s" % str(node_voltages_by_name.keys()))
 		has_logged_first_simulation_sample_node_names = true
+	if remaining_initial_samples_to_log_key_voltages_for > 0:
+		remaining_initial_samples_to_log_key_voltages_for -= 1
+		var sim_time_seconds: float = most_recent_sample.get("simulationTimeSeconds", 0.0)
+		print("[spice3d] sample t=%fs net1=%s btn_out_n=%s drained=%d" % [
+				sim_time_seconds,
+				str(node_voltages_by_name.get("net1", "MISSING")),
+				str(node_voltages_by_name.get("btn_out_n", "MISSING")),
+				drained_samples.size()])
 	spice3d_root_node_for_sample_polling.apply_node_voltages_to_wire_colors(
 			schematic_view,
 			node_voltages_by_name,
 			VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL)
+	wire_color_apply_invocation_count += 1
+	if wire_color_apply_invocation_count == 1:
+		var schematic_view_child_count: int = schematic_view.get_child_count()
+		var wires_tagged_with_spice_node_name_by_label: Dictionary = {}
+		for one_child in schematic_view.get_children():
+			if one_child is MeshInstance3D and one_child.has_meta("spice_node_name"):
+				var one_meta_value: String = one_child.get_meta("spice_node_name")
+				wires_tagged_with_spice_node_name_by_label[one_meta_value] = (
+						wires_tagged_with_spice_node_name_by_label.get(one_meta_value, 0) + 1)
+		print("[spice3d] schematic_view has %d children; spice_node_name-tagged wire counts: %s" % [
+				schematic_view_child_count,
+				str(wires_tagged_with_spice_node_name_by_label)])
 
 
 func resolve_latest_sky130_ciel_version_from_manifest_with_fallback() -> String:
