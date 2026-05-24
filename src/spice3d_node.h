@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include "godot_cpp/classes/camera3d.hpp"
+#include "godot_cpp/classes/input_event.hpp"
 #include "godot_cpp/classes/node.hpp"
 #include "godot_cpp/classes/node3d.hpp"
 #include "godot_cpp/classes/wrapped.hpp"
@@ -9,6 +11,7 @@
 #include "godot_cpp/variant/packed_byte_array.hpp"
 #include "godot_cpp/variant/packed_string_array.hpp"
 #include "godot_cpp/variant/string.hpp"
+#include "godot_cpp/variant/vector3.hpp"
 
 namespace spice3d {
 
@@ -40,6 +43,14 @@ public:
 			const godot::PackedByteArray &compressed_tar_zst_bytes,
 			const godot::String &filesystem_output_directory_absolute_path,
 			const godot::PackedStringArray &keep_only_paths_containing_any_of_these_substrings);
+
+	void on_button_area_input_event(
+			godot::Camera3D *picking_camera,
+			godot::Ref<godot::InputEvent> input_event,
+			godot::Vector3 hit_position_in_world,
+			godot::Vector3 hit_normal,
+			int collision_shape_index,
+			godot::String clicked_button_instance_name);
 
 private:
 	std::unique_ptr<SpiceSimulator> simulator;

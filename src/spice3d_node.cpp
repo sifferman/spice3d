@@ -1,15 +1,20 @@
 #include "spice3d_node.h"
 
+#include "godot_cpp/classes/area3d.hpp"
 #include "godot_cpp/classes/array_mesh.hpp"
 #include "godot_cpp/classes/box_mesh.hpp"
+#include "godot_cpp/classes/box_shape3d.hpp"
 #include "godot_cpp/classes/capsule_mesh.hpp"
+#include "godot_cpp/classes/collision_shape3d.hpp"
 #include "godot_cpp/classes/cylinder_mesh.hpp"
 #include "godot_cpp/classes/geometry2d.hpp"
+#include "godot_cpp/classes/input_event_mouse_button.hpp"
 #include "godot_cpp/classes/label3d.hpp"
 #include "godot_cpp/classes/mesh.hpp"
 #include "godot_cpp/classes/mesh_instance3d.hpp"
 #include "godot_cpp/classes/standard_material3d.hpp"
 #include "godot_cpp/core/class_db.hpp"
+#include "godot_cpp/variant/callable.hpp"
 #include "godot_cpp/variant/array.hpp"
 #include "godot_cpp/variant/basis.hpp"
 #include "godot_cpp/variant/color.hpp"
@@ -510,6 +515,134 @@ struct DrawingRenderMaterials {
 	godot::Color text_color;
 };
 
+constexpr double BUTTON_COMPONENT_SYMBOL_VSOURCE_TYPE_NAME_LENGTH = 7;
+const std::string SYMBOL_TYPE_NAME_FOR_BUTTON_COMPONENTS = "vsource";
+constexpr double BUTTON_AREA_COLLISION_SHAPE_VERTICAL_EXTENT_IN_WORLD_UNITS = 8.0;
+constexpr double BUTTON_AREA_COLLISION_SHAPE_HORIZONTAL_MARGIN_IN_WORLD_UNITS = 5.0;
+
+bool component_symbol_type_matches_button_vsource(const ComponentInstance &component) {
+	return component.symbol_was_resolved
+			&& component.symbol_type == SYMBOL_TYPE_NAME_FOR_BUTTON_COMPONENTS;
+}
+
+DrawingRecord transform_symbol_local_drawing_record_to_schematic_global(
+		const DrawingRecord &symbol_local_record,
+		const ComponentInstance &component);
+
+struct SchematicGlobalAxisAlignedBoundingBox {
+	double minimum_x;
+	double minimum_y;
+	double maximum_x;
+	double maximum_y;
+	bool has_any_points;
+};
+
+void expand_global_bounding_box_to_include_point(
+		SchematicGlobalAxisAlignedBoundingBox *bounding_box,
+		double schematic_global_x,
+		double schematic_global_y) {
+	if (!bounding_box->has_any_points) {
+		bounding_box->minimum_x = schematic_global_x;
+		bounding_box->maximum_x = schematic_global_x;
+		bounding_box->minimum_y = schematic_global_y;
+		bounding_box->maximum_y = schematic_global_y;
+		bounding_box->has_any_points = true;
+		return;
+	}
+	if (schematic_global_x < bounding_box->minimum_x) bounding_box->minimum_x = schematic_global_x;
+	if (schematic_global_x > bounding_box->maximum_x) bounding_box->maximum_x = schematic_global_x;
+	if (schematic_global_y < bounding_box->minimum_y) bounding_box->minimum_y = schematic_global_y;
+	if (schematic_global_y > bounding_box->maximum_y) bounding_box->maximum_y = schematic_global_y;
+}
+
+void accumulate_drawing_record_bounding_box_in_global_coordinates(
+		const DrawingRecord &record_in_global_coordinates,
+		SchematicGlobalAxisAlignedBoundingBox *bounding_box) {
+	std::visit([&](const auto &concrete_record) {
+		using ConcreteRecordType = std::decay_t<decltype(concrete_record)>;
+		if constexpr (std::is_same_v<ConcreteRecordType, DrawingLineSegment>) {
+			expand_global_bounding_box_to_include_point(bounding_box, concrete_record.x1, concrete_record.y1);
+			expand_global_bounding_box_to_include_point(bounding_box, concrete_record.x2, concrete_record.y2);
+		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingBox>) {
+			expand_global_bounding_box_to_include_point(bounding_box, concrete_record.x1, concrete_record.y1);
+			expand_global_bounding_box_to_include_point(bounding_box, concrete_record.x2, concrete_record.y2);
+		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingPolygon>) {
+			const size_t vertex_count = std::min(concrete_record.vertex_xs.size(), concrete_record.vertex_ys.size());
+			for (size_t i = 0; i < vertex_count; ++i) {
+				expand_global_bounding_box_to_include_point(
+						bounding_box, concrete_record.vertex_xs[i], concrete_record.vertex_ys[i]);
+			}
+		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingArc>) {
+			expand_global_bounding_box_to_include_point(
+					bounding_box, concrete_record.center_x - concrete_record.radius, concrete_record.center_y - concrete_record.radius);
+			expand_global_bounding_box_to_include_point(
+					bounding_box, concrete_record.center_x + concrete_record.radius, concrete_record.center_y + concrete_record.radius);
+		} else if constexpr (std::is_same_v<ConcreteRecordType, DrawingText>) {
+			expand_global_bounding_box_to_include_point(bounding_box, concrete_record.anchor_x, concrete_record.anchor_y);
+		}
+	}, record_in_global_coordinates);
+}
+
+SchematicGlobalAxisAlignedBoundingBox compute_global_bounding_box_for_component_drawing_records(
+		const ComponentInstance &component) {
+	SchematicGlobalAxisAlignedBoundingBox bounding_box;
+	bounding_box.has_any_points = false;
+	bounding_box.minimum_x = 0.0;
+	bounding_box.maximum_x = 0.0;
+	bounding_box.minimum_y = 0.0;
+	bounding_box.maximum_y = 0.0;
+	for (const auto &symbol_local_record : component.symbol_drawing_records_in_local_coordinates) {
+		const DrawingRecord global_record =
+				transform_symbol_local_drawing_record_to_schematic_global(symbol_local_record, component);
+		accumulate_drawing_record_bounding_box_in_global_coordinates(global_record, &bounding_box);
+	}
+	return bounding_box;
+}
+
+godot::Area3D *create_clickable_button_area_for_component(
+		Spice3DNode *spice3d_node,
+		godot::Node3D *parent_node_for_area,
+		const ComponentInstance &button_component) {
+	const SchematicGlobalAxisAlignedBoundingBox bounding_box =
+			compute_global_bounding_box_for_component_drawing_records(button_component);
+	if (!bounding_box.has_any_points) return nullptr;
+
+	const double bounding_box_width_in_world_x =
+			(bounding_box.maximum_x - bounding_box.minimum_x)
+			+ 2.0 * BUTTON_AREA_COLLISION_SHAPE_HORIZONTAL_MARGIN_IN_WORLD_UNITS;
+	const double bounding_box_depth_in_world_z =
+			(bounding_box.maximum_y - bounding_box.minimum_y)
+			+ 2.0 * BUTTON_AREA_COLLISION_SHAPE_HORIZONTAL_MARGIN_IN_WORLD_UNITS;
+	const double bounding_box_center_world_x = 0.5 * (bounding_box.minimum_x + bounding_box.maximum_x);
+	const double bounding_box_center_world_z = 0.5 * (bounding_box.minimum_y + bounding_box.maximum_y);
+
+	godot::Ref<godot::BoxShape3D> button_collision_shape_resource;
+	button_collision_shape_resource.instantiate();
+	button_collision_shape_resource->set_size(godot::Vector3(
+			bounding_box_width_in_world_x,
+			BUTTON_AREA_COLLISION_SHAPE_VERTICAL_EXTENT_IN_WORLD_UNITS,
+			bounding_box_depth_in_world_z));
+
+	godot::CollisionShape3D *button_collision_shape_node = memnew(godot::CollisionShape3D);
+	button_collision_shape_node->set_shape(button_collision_shape_resource);
+
+	godot::Area3D *button_clickable_area = memnew(godot::Area3D);
+	button_clickable_area->set_ray_pickable(true);
+	godot::Vector3 button_area_origin = schematic_xy_to_lying_flat_world_position(
+			bounding_box_center_world_x, bounding_box_center_world_z);
+	button_area_origin.y = 0.5 * BUTTON_AREA_COLLISION_SHAPE_VERTICAL_EXTENT_IN_WORLD_UNITS;
+	button_clickable_area->set_position(button_area_origin);
+	button_clickable_area->add_child(button_collision_shape_node);
+	parent_node_for_area->add_child(button_clickable_area);
+
+	const godot::String button_instance_name_godot_string =
+			c_string_to_godot_string(button_component.instance_name);
+	button_clickable_area->connect(
+			"input_event",
+			godot::Callable(spice3d_node, "on_button_area_input_event").bind(button_instance_name_godot_string));
+	return button_clickable_area;
+}
+
 void render_drawing_record_in_global_coordinates(
 		godot::Node3D *parent_node,
 		const DrawingRecord &record_in_global_coordinates,
@@ -619,6 +752,7 @@ DrawingRenderMaterials build_drawing_render_materials() {
 }
 
 void add_rendered_meshes_for_schematic_to_parent_node(
+		Spice3DNode *spice3d_node_for_button_signals,
 		godot::Node3D *parent_node,
 		const Schematic &loaded_schematic) {
 	const godot::Ref<godot::Material> wire_material = build_wire_render_material();
@@ -642,6 +776,9 @@ void add_rendered_meshes_for_schematic_to_parent_node(
 			}
 		} else {
 			add_component_placeholder_mesh_to_parent_node(parent_node, one_component, placeholder_material);
+		}
+		if (component_symbol_type_matches_button_vsource(one_component)) {
+			create_clickable_button_area_for_component(spice3d_node_for_button_signals, parent_node, one_component);
 		}
 	}
 }
@@ -677,6 +814,17 @@ void Spice3DNode::_bind_methods() {
 					"filesystem_output_directory_absolute_path",
 					"keep_only_paths_containing_any_of_these_substrings"),
 			&Spice3DNode::extract_zstd_tar_archive_filtered_by_path_substring);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("on_button_area_input_event",
+					"picking_camera",
+					"input_event",
+					"hit_position_in_world",
+					"hit_normal",
+					"collision_shape_index",
+					"clicked_button_instance_name"),
+			&Spice3DNode::on_button_area_input_event);
+	ADD_SIGNAL(godot::MethodInfo("button_pressed",
+			godot::PropertyInfo(godot::Variant::STRING, "button_instance_name")));
 }
 
 Spice3DNode::Spice3DNode() = default;
@@ -770,10 +918,29 @@ godot::Dictionary Spice3DNode::load_schematic_and_render_into_node3d(
 			search_directories_utf8);
 	if (load_result.was_successful && parent_node_for_rendered_meshes != nullptr) {
 		add_rendered_meshes_for_schematic_to_parent_node(
+				this,
 				parent_node_for_rendered_meshes,
 				load_result.loaded_schematic);
 	}
 	return build_schematic_dictionary_from_result(load_result);
+}
+
+void Spice3DNode::on_button_area_input_event(
+		godot::Camera3D *picking_camera,
+		godot::Ref<godot::InputEvent> input_event,
+		godot::Vector3 hit_position_in_world,
+		godot::Vector3 hit_normal,
+		int collision_shape_index,
+		godot::String clicked_button_instance_name) {
+	(void)picking_camera;
+	(void)hit_position_in_world;
+	(void)hit_normal;
+	(void)collision_shape_index;
+	const godot::Ref<godot::InputEventMouseButton> mouse_button_event = input_event;
+	if (mouse_button_event.is_null()) return;
+	if (!mouse_button_event->is_pressed()) return;
+	if (mouse_button_event->get_button_index() != godot::MOUSE_BUTTON_LEFT) return;
+	emit_signal("button_pressed", clicked_button_instance_name);
 }
 
 } // namespace spice3d

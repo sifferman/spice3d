@@ -33,6 +33,7 @@ const SKY130_PATH_SUBSTRINGS_TO_KEEP_DURING_EXTRACTION := [
 func _ready() -> void:
 	request_persistent_browser_storage_on_web()
 	var spice3d_root_node := Spice3DNode.new()
+	spice3d_root_node.button_pressed.connect(_on_schematic_button_pressed)
 	add_child(spice3d_root_node)
 	stage_bundled_schematic_files_to_writable_directory()
 	await ensure_xschem_devices_library_is_cached()
@@ -51,6 +52,16 @@ func _ready() -> void:
 			"",
 			extra_symbol_search_directories)
 	update_status_text(spice3d_root_node, loaded_schematic)
+
+
+var pressed_button_high_state_by_instance_name: Dictionary = {}
+
+
+func _on_schematic_button_pressed(button_instance_name: String) -> void:
+	var previously_high_state: bool = pressed_button_high_state_by_instance_name.get(button_instance_name, false)
+	var new_high_state := not previously_high_state
+	pressed_button_high_state_by_instance_name[button_instance_name] = new_high_state
+	print("[spice3d] button '%s' toggled %s" % [button_instance_name, "HIGH" if new_high_state else "LOW"])
 
 
 func resolve_latest_sky130_ciel_version_from_manifest_with_fallback() -> String:
