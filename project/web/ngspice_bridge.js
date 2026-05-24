@@ -80,6 +80,23 @@
 			return drainedSamples;
 		},
 
+		decorateSampleWithNamedVoltages: function decorateSampleWithNamedVoltages(rawSample) {
+			if (!this.nodeNames || !rawSample || !Array.isArray(rawSample.nodeVoltages)) {
+				return rawSample;
+			}
+			const namedVoltagesBySpiceNodeName = Object.create(null);
+			for (let nodeIndex = 0; nodeIndex < this.nodeNames.length; ++nodeIndex) {
+				const nodeName = this.nodeNames[nodeIndex];
+				if (typeof nodeName === 'string') {
+					namedVoltagesBySpiceNodeName[nodeName.toLowerCase()] = rawSample.nodeVoltages[nodeIndex];
+				}
+			}
+			return {
+				simulationTimeSeconds: rawSample.simulationTimeSeconds,
+				nodeVoltagesByName: namedVoltagesBySpiceNodeName,
+			};
+		},
+
 		handleWorkerMessage: function handleWorkerMessage(workerMessage) {
 			switch (workerMessage.messageKind) {
 				case 'workerReady':
@@ -110,7 +127,7 @@
 					this.nodeNames = workerMessage.nodeNames;
 					break;
 				case 'simulationSample':
-					this.bufferedSimulationSamples.push(workerMessage.sample);
+					this.bufferedSimulationSamples.push(this.decorateSampleWithNamedVoltages(workerMessage.sample));
 					break;
 				case 'runningStateChanged':
 					this.isSimulationRunning = Boolean(workerMessage.isSimulationRunning);

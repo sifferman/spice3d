@@ -106,7 +106,12 @@ func _process(delta_seconds_since_last_frame: float) -> void:
 	if drained_samples.is_empty():
 		return
 	var most_recent_sample = drained_samples[drained_samples.size() - 1]
-	print("[spice3d] latest sample: %s" % most_recent_sample)
+	if not (most_recent_sample is Dictionary) or not most_recent_sample.has("nodeVoltagesByName"):
+		return
+	spice3d_root_node_for_sample_polling.apply_node_voltages_to_wire_colors(
+			schematic_view,
+			most_recent_sample["nodeVoltagesByName"],
+			VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL)
 
 
 func resolve_latest_sky130_ciel_version_from_manifest_with_fallback() -> String:

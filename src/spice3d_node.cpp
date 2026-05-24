@@ -267,16 +267,57 @@ void add_cylinder_segment_between_two_schematic_points(
 	parent_node->add_child(cylinder_mesh_instance);
 }
 
+const char *WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME = "spice_node_name";
+
+godot::String build_spice_node_name_from_xschem_net_label(const std::string &xschem_net_label) {
+	std::string normalized = xschem_net_label;
+	if (!normalized.empty() && normalized[0] == '#') {
+		normalized = normalized.substr(1);
+	}
+	std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+			[](unsigned char one_character) {
+				return static_cast<char>(std::tolower(one_character));
+			});
+	return c_string_to_godot_string(normalized);
+}
+
+godot::Ref<godot::StandardMaterial3D> build_wire_render_material_with_independent_albedo() {
+	godot::Ref<godot::StandardMaterial3D> material;
+	material.instantiate();
+	material->set_albedo(godot::Color(0.55f, 0.6f, 0.75f));
+	material->set_feature(godot::BaseMaterial3D::FEATURE_EMISSION, true);
+	material->set_emission(godot::Color(0.15f, 0.2f, 0.4f));
+	return material;
+}
+
 void add_wire_segment_capsule_to_parent_node(
 		godot::Node3D *parent_node,
-		const WireSegment &wire,
-		const godot::Ref<godot::Material> &wire_material) {
-	add_capsule_segment_between_two_schematic_points(
-			parent_node,
-			wire.start_x, wire.start_y,
-			wire.end_x, wire.end_y,
-			WIRE_STROKE_RADIUS_IN_WORLD_UNITS,
-			wire_material);
+		const WireSegment &wire) {
+	const godot::Vector3 start_world_point = schematic_xy_to_lying_flat_world_position(wire.start_x, wire.start_y);
+	const godot::Vector3 end_world_point = schematic_xy_to_lying_flat_world_position(wire.end_x, wire.end_y);
+	const godot::Vector3 segment_direction_in_world = end_world_point - start_world_point;
+	const double segment_length_in_world = segment_direction_in_world.length();
+	if (segment_length_in_world <= 0.0) return;
+
+	const double capsule_total_height_with_extended_caps =
+			segment_length_in_world + 2.0 * WIRE_STROKE_RADIUS_IN_WORLD_UNITS;
+
+	const godot::Ref<godot::StandardMaterial3D> per_wire_material =
+			build_wire_render_material_with_independent_albedo();
+
+	godot::MeshInstance3D *wire_mesh_instance = memnew(godot::MeshInstance3D);
+	wire_mesh_instance->set_mesh(build_capsule_mesh_with_radius_and_total_height(
+			WIRE_STROKE_RADIUS_IN_WORLD_UNITS, capsule_total_height_with_extended_caps));
+	wire_mesh_instance->set_material_override(per_wire_material);
+
+	godot::Transform3D wire_transform;
+	wire_transform.basis = basis_aligning_local_y_axis_with_xz_plane_direction(segment_direction_in_world);
+	wire_transform.origin = (start_world_point + end_world_point) * 0.5;
+	wire_mesh_instance->set_transform(wire_transform);
+	wire_mesh_instance->set_meta(
+			WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME,
+			build_spice_node_name_from_xschem_net_label(wire.net_label));
+	parent_node->add_child(wire_mesh_instance);
 }
 
 void add_component_placeholder_mesh_to_parent_node(
@@ -757,9 +798,8 @@ void add_rendered_meshes_for_schematic_to_parent_node(
 		Spice3DNode *spice3d_node_for_button_signals,
 		godot::Node3D *parent_node,
 		const Schematic &loaded_schematic) {
-	const godot::Ref<godot::Material> wire_material = build_wire_render_material();
 	for (const auto &one_wire : loaded_schematic.wires) {
-		add_wire_segment_capsule_to_parent_node(parent_node, one_wire, wire_material);
+		add_wire_segment_capsule_to_parent_node(parent_node, one_wire);
 	}
 
 	const DrawingRenderMaterials drawing_materials = build_drawing_render_materials();
@@ -838,6 +878,12 @@ void Spice3DNode::_bind_methods() {
 	godot::ClassDB::bind_method(
 			godot::D_METHOD("drain_buffered_simulation_samples_from_web_simulator"),
 			&Spice3DNode::drain_buffered_simulation_samples_from_web_simulator);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("apply_node_voltages_to_wire_colors",
+					"schematic_root_node",
+					"spice_node_name_to_voltage",
+					"vdd_volts"),
+			&Spice3DNode::apply_node_voltages_to_wire_colors);
 	godot::ClassDB::bind_method(
 			godot::D_METHOD("on_button_area_input_event",
 					"picking_camera",
@@ -1071,6 +1117,50 @@ godot::Array Spice3DNode::drain_buffered_simulation_samples_from_web_simulator()
 	}
 #endif
 	return drained_samples_as_godot_array;
+}
+
+namespace {
+
+godot::Color interpolate_voltage_into_wire_color(double voltage_volts, double vdd_volts) {
+	const double saturation_factor = vdd_volts > 0.0
+			? godot::Math::clamp(voltage_volts / vdd_volts, 0.0, 1.0)
+			: 0.0;
+	const godot::Color low_color(0.2f, 0.35f, 0.85f);
+	const godot::Color high_color(0.95f, 0.95f, 0.4f);
+	return low_color.lerp(high_color, saturation_factor);
+}
+
+void update_one_wire_mesh_albedo_from_voltage(
+		godot::MeshInstance3D *wire_mesh_instance,
+		const godot::Dictionary &spice_node_name_to_voltage,
+		double vdd_volts) {
+	const godot::Variant meta_value = wire_mesh_instance->get_meta(
+			WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME, godot::Variant());
+	if (meta_value.get_type() != godot::Variant::STRING) return;
+	const godot::String spice_node_name = static_cast<godot::String>(meta_value);
+	if (!spice_node_name_to_voltage.has(spice_node_name)) return;
+	const double voltage_volts = static_cast<double>(spice_node_name_to_voltage[spice_node_name]);
+	const godot::Color updated_albedo_color = interpolate_voltage_into_wire_color(voltage_volts, vdd_volts);
+	godot::Ref<godot::StandardMaterial3D> wire_material = wire_mesh_instance->get_material_override();
+	if (wire_material.is_null()) return;
+	wire_material->set_albedo(updated_albedo_color);
+	wire_material->set_emission(updated_albedo_color * 0.4f);
+}
+
+} // namespace
+
+void Spice3DNode::apply_node_voltages_to_wire_colors(
+		godot::Node3D *schematic_root_node,
+		const godot::Dictionary &spice_node_name_to_voltage,
+		double vdd_volts) {
+	if (schematic_root_node == nullptr) return;
+	const int child_count = schematic_root_node->get_child_count();
+	for (int child_index = 0; child_index < child_count; ++child_index) {
+		godot::Node *one_child = schematic_root_node->get_child(child_index);
+		godot::MeshInstance3D *one_mesh_instance = godot::Object::cast_to<godot::MeshInstance3D>(one_child);
+		if (one_mesh_instance == nullptr) continue;
+		update_one_wire_mesh_albedo_from_voltage(one_mesh_instance, spice_node_name_to_voltage, vdd_volts);
+	}
 }
 
 void Spice3DNode::on_button_area_input_event(
