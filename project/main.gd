@@ -66,11 +66,12 @@ func _ready() -> void:
 
 
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
-const TRANSIENT_TIMESTEP_SECONDS := 1.0e-3
+const TRANSIENT_TIMESTEP_SECONDS := 1.0e-4
 const TRANSIENT_STOP_TIME_SECONDS_EFFECTIVELY_FOREVER := 1.0e6
 const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.1
 const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 30.0
-const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 5
+const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 3
+const MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC := 0.5
 
 const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
 const SKY130_PDK_LIB_CORNER_NAME := "tt"
@@ -88,6 +89,8 @@ var simulation_sample_poll_accumulator_seconds := 0.0
 var has_logged_first_simulation_sample_node_names := false
 var remaining_initial_samples_to_log_key_voltages_for := NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR
 var wire_color_apply_invocation_count := 0
+var most_recently_logged_net1_voltage_volts := -100.0
+var most_recently_logged_btn_out_n_voltage_volts := -100.0
 
 
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
@@ -245,14 +248,27 @@ func _process(delta_seconds_since_last_frame: float) -> void:
 	if not has_logged_first_simulation_sample_node_names:
 		print("[spice3d] first sample node names: %s" % str(node_voltages_by_name.keys()))
 		has_logged_first_simulation_sample_node_names = true
-	if remaining_initial_samples_to_log_key_voltages_for > 0:
-		remaining_initial_samples_to_log_key_voltages_for -= 1
+	var current_net1_voltage_volts: float = node_voltages_by_name.get("net1", 0.0)
+	var current_btn_out_n_voltage_volts: float = node_voltages_by_name.get("btn_out_n", 0.0)
+	var net1_voltage_changed_enough_to_log: bool = absf(
+			current_net1_voltage_volts - most_recently_logged_net1_voltage_volts
+			) >= MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC
+	var btn_out_n_voltage_changed_enough_to_log: bool = absf(
+			current_btn_out_n_voltage_volts - most_recently_logged_btn_out_n_voltage_volts
+			) >= MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC
+	if (remaining_initial_samples_to_log_key_voltages_for > 0
+			or net1_voltage_changed_enough_to_log
+			or btn_out_n_voltage_changed_enough_to_log):
+		if remaining_initial_samples_to_log_key_voltages_for > 0:
+			remaining_initial_samples_to_log_key_voltages_for -= 1
 		var sim_time_seconds: float = most_recent_sample.get("simulationTimeSeconds", 0.0)
-		print("[spice3d] sample t=%fs net1=%s btn_out_n=%s drained=%d" % [
+		print("[spice3d] sample t=%fs net1=%f btn_out_n=%f drained=%d" % [
 				sim_time_seconds,
-				str(node_voltages_by_name.get("net1", "MISSING")),
-				str(node_voltages_by_name.get("btn_out_n", "MISSING")),
+				current_net1_voltage_volts,
+				current_btn_out_n_voltage_volts,
 				drained_samples.size()])
+		most_recently_logged_net1_voltage_volts = current_net1_voltage_volts
+		most_recently_logged_btn_out_n_voltage_volts = current_btn_out_n_voltage_volts
 	spice3d_root_node_for_sample_polling.apply_node_voltages_to_wire_colors(
 			schematic_view,
 			node_voltages_by_name,
