@@ -23,10 +23,16 @@ const SKY130_CIEL_VERSION_MANIFEST_URL := \
 		"https://www-archive.fossi-foundation.org/ciel-releases/sky130/manifest.json"
 const SKY130_CIEL_FALLBACK_VERSION_IF_MANIFEST_UNREACHABLE := "74c0e6b118a67d94c24172143d3bd597473fa63d"
 const SKY130_CORS_PROXY_URL_PREFIX := "https://ciel-cors-proxy.sifferman.workers.dev/?url="
-const SKY130_ARCHIVE_FILENAMES_TO_FETCH_AT_STARTUP := ["common.tar.zst"]
+const SKY130_ARCHIVE_FILENAMES_TO_FETCH_AT_STARTUP := [
+	"common.tar.zst",
+	"sky130_fd_pr.tar.zst",
+	"sky130_fd_sc_hd.tar.zst",
+]
 const SKY130_PATH_SUBSTRINGS_TO_KEEP_DURING_EXTRACTION := [
 	"/libs.tech/combined/",
 	"/libs.tech/xschem/",
+	"/libs.ref/sky130_fd_pr/spice/",
+	"/libs.ref/sky130_fd_sc_hd/spice/",
 ]
 
 
@@ -67,8 +73,12 @@ const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 30.0
 
 const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
 const SKY130_PDK_LIB_CORNER_NAME := "tt"
-const SKY130_PDK_SOURCE_DIR_RELATIVE_TO_CIEL_ROOT := "/sky130A/libs.tech/combined"
-const SKY130_PDK_VIRTUAL_DIR_INSIDE_WORKER := "/sky130A/libs.tech/combined"
+const SKY130_PDK_STDCELL_LIBRARY_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice"
+const SKY130_PDK_SOURCE_SUBDIRECTORIES_RELATIVE_TO_CIEL_ROOT := [
+	"/sky130A/libs.tech/combined",
+	"/sky130A/libs.ref/sky130_fd_pr/spice",
+	"/sky130A/libs.ref/sky130_fd_sc_hd/spice",
+]
 
 var pressed_button_high_state_by_instance_name: Dictionary = {}
 var spice3d_root_node_for_sample_polling: Node = null
@@ -91,12 +101,16 @@ func stage_sky130_pdk_files_into_web_simulator_filesystem(
 		spice3d_root_node: Node,
 		sky130_ciel_version: String) -> void:
 	var pdk_filesystem_root_path := absolute_path_for_sky130_local_cache_root(sky130_ciel_version)
-	var pdk_combined_models_source_directory_path := pdk_filesystem_root_path + SKY130_PDK_SOURCE_DIR_RELATIVE_TO_CIEL_ROOT
-	var staged_file_count := stage_text_files_recursively_into_worker_filesystem(
-			spice3d_root_node,
-			pdk_combined_models_source_directory_path,
-			SKY130_PDK_VIRTUAL_DIR_INSIDE_WORKER)
-	print("[spice3d] staged %d sky130 PDK file(s) into worker MEMFS" % staged_file_count)
+	var total_staged_file_count := 0
+	for one_pdk_subdirectory in SKY130_PDK_SOURCE_SUBDIRECTORIES_RELATIVE_TO_CIEL_ROOT:
+		var source_directory_absolute_path: String = pdk_filesystem_root_path + one_pdk_subdirectory
+		var virtual_directory_inside_worker: String = one_pdk_subdirectory
+		var staged_file_count_for_this_subdirectory := stage_text_files_recursively_into_worker_filesystem(
+				spice3d_root_node,
+				source_directory_absolute_path,
+				virtual_directory_inside_worker)
+		total_staged_file_count += staged_file_count_for_this_subdirectory
+	print("[spice3d] staged %d sky130 PDK file(s) into worker MEMFS" % total_staged_file_count)
 
 
 func stage_text_files_recursively_into_worker_filesystem(
@@ -134,23 +148,23 @@ func stage_text_files_recursively_into_worker_filesystem(
 
 
 func prepend_pdk_library_include_to_netlist_lines(netlist_lines: PackedStringArray) -> PackedStringArray:
+	var pdk_include_directives := PackedStringArray()
+	pdk_include_directives.append(".lib %s %s" % [
+			SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
+			SKY130_PDK_LIB_CORNER_NAME])
+	pdk_include_directives.append(".include %s" % SKY130_PDK_STDCELL_LIBRARY_VIRTUAL_PATH_IN_WORKER)
 	var augmented_netlist_lines := PackedStringArray()
-	var inserted_pdk_lib_directive := false
+	var inserted_pdk_directives := false
 	for one_existing_line in netlist_lines:
 		augmented_netlist_lines.append(one_existing_line)
-		if not inserted_pdk_lib_directive and one_existing_line.begins_with(".subckt"):
-			augmented_netlist_lines.append(
-					".lib %s %s" % [
-						SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
-						SKY130_PDK_LIB_CORNER_NAME])
-			inserted_pdk_lib_directive = true
-	if not inserted_pdk_lib_directive:
-		var lines_with_lib_at_top := PackedStringArray()
-		lines_with_lib_at_top.append(".lib %s %s" % [
-				SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
-				SKY130_PDK_LIB_CORNER_NAME])
-		lines_with_lib_at_top.append_array(augmented_netlist_lines)
-		augmented_netlist_lines = lines_with_lib_at_top
+		if not inserted_pdk_directives and one_existing_line.begins_with(".subckt"):
+			augmented_netlist_lines.append_array(pdk_include_directives)
+			inserted_pdk_directives = true
+	if not inserted_pdk_directives:
+		var lines_with_includes_at_top := PackedStringArray()
+		lines_with_includes_at_top.append_array(pdk_include_directives)
+		lines_with_includes_at_top.append_array(augmented_netlist_lines)
+		augmented_netlist_lines = lines_with_includes_at_top
 	return augmented_netlist_lines
 
 
