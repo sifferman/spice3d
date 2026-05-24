@@ -11,7 +11,7 @@ This README only documents how to build/run what's in *this* repository.
 
 ## Status
 
-Early scaffolding. See [`LOG.md`](./LOG.md) for the running progress log.
+Early scaffolding. The running progress log lives in each PR's description.
 
 ## Layout
 
