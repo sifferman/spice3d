@@ -14,7 +14,7 @@ LOADER_OBJ := $(LOADER_SRC:.cpp=.o)
 
 TEST_SRC := test_schematic_loader.cpp
 
-EXAMPLES_DIR ?= ../../spice3d_notes/examples
+EXAMPLES_DIR ?= ../project/examples
 
 INCLUDES := -I$(X2S_DIR) -I$(SRC_DIR)
 

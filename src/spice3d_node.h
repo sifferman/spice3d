@@ -48,6 +48,10 @@ public:
 	void halt_simulation_on_web_simulator();
 	void set_external_voltage_source_on_web_simulator(const godot::String &source_name, double volts);
 	godot::Array drain_buffered_simulation_samples_from_web_simulator();
+	bool install_file_text_in_web_simulator_filesystem(
+			const godot::String &virtual_path_inside_worker_filesystem,
+			const godot::String &file_content_text);
+	bool set_simulation_sample_throttle_on_web_simulator(double max_samples_per_second);
 	void apply_node_voltages_to_wire_colors(
 			godot::Node3D *schematic_root_node,
 			const godot::Dictionary &spice_node_name_to_voltage,

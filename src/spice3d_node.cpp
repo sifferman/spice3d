@@ -879,6 +879,14 @@ void Spice3DNode::_bind_methods() {
 			godot::D_METHOD("drain_buffered_simulation_samples_from_web_simulator"),
 			&Spice3DNode::drain_buffered_simulation_samples_from_web_simulator);
 	godot::ClassDB::bind_method(
+			godot::D_METHOD("install_file_text_in_web_simulator_filesystem",
+					"virtual_path_inside_worker_filesystem",
+					"file_content_text"),
+			&Spice3DNode::install_file_text_in_web_simulator_filesystem);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("set_simulation_sample_throttle_on_web_simulator", "max_samples_per_second"),
+			&Spice3DNode::set_simulation_sample_throttle_on_web_simulator);
+	godot::ClassDB::bind_method(
 			godot::D_METHOD("apply_node_voltages_to_wire_colors",
 					"schematic_root_node",
 					"spice_node_name_to_voltage",
@@ -1099,6 +1107,43 @@ void Spice3DNode::set_external_voltage_source_on_web_simulator(
 #else
 	(void)source_name;
 	(void)volts;
+#endif
+}
+
+bool Spice3DNode::install_file_text_in_web_simulator_filesystem(
+		const godot::String &virtual_path_inside_worker_filesystem,
+		const godot::String &file_content_text) {
+#ifdef WEB_ENABLED
+	const godot::String escaped_virtual_path = virtual_path_inside_worker_filesystem
+			.replace("\\", "\\\\").replace("\"", "\\\"");
+	const godot::String javascript_to_evaluate = godot::String(
+			"globalThis.spice3d && globalThis.spice3d.installFileTextInWorkerFilesystem(")
+			+ godot::String("\"") + escaped_virtual_path + godot::String("\",")
+			+ godot::String("globalThis.__spice3dStagingFileContent || \"\");");
+	const godot::String set_content_javascript = godot::String(
+			"globalThis.__spice3dStagingFileContent = ")
+			+ godot::JSON::stringify(file_content_text) + godot::String(";");
+	godot::JavaScriptBridge::get_singleton()->eval(set_content_javascript);
+	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
+	godot::JavaScriptBridge::get_singleton()->eval("globalThis.__spice3dStagingFileContent = null;");
+	return true;
+#else
+	(void)virtual_path_inside_worker_filesystem;
+	(void)file_content_text;
+	return false;
+#endif
+}
+
+bool Spice3DNode::set_simulation_sample_throttle_on_web_simulator(double max_samples_per_second) {
+#ifdef WEB_ENABLED
+	const godot::String javascript_to_evaluate =
+			godot::String("globalThis.spice3d && globalThis.spice3d.setSampleThrottleMaxSamplesPerSecond(")
+			+ godot::String::num(max_samples_per_second) + godot::String(");");
+	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
+	return true;
+#else
+	(void)max_samples_per_second;
+	return false;
 #endif
 }
 

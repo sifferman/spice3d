@@ -74,6 +74,25 @@
 			}
 		},
 
+		installFileTextInWorkerFilesystem: function installFileTextInWorkerFilesystem(virtualPath, fileContent) {
+			if (!this.ngspiceWorker) return false;
+			this.ngspiceWorker.postMessage({
+				messageKind: 'installFileText',
+				virtualPath: String(virtualPath),
+				fileContent: String(fileContent),
+			});
+			return true;
+		},
+
+		setSampleThrottleMaxSamplesPerSecond: function setSampleThrottleMaxSamplesPerSecond(maxSamplesPerSecond) {
+			if (!this.ngspiceWorker) return false;
+			this.ngspiceWorker.postMessage({
+				messageKind: 'setSampleThrottle',
+				maxSamplesPerSecond: Number(maxSamplesPerSecond),
+			});
+			return true;
+		},
+
 		takeBufferedSimulationSamples: function takeBufferedSimulationSamples() {
 			const drainedSamples = this.bufferedSimulationSamples;
 			this.bufferedSimulationSamples = [];

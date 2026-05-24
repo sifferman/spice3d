@@ -43,19 +43,21 @@ int test_button_example_schematic(const std::string &examples_directory) {
 		std::fprintf(stderr, "expected cell_name=button_test, got '%s'\n", schematic.cell_name.c_str());
 		return 1;
 	}
-	if (schematic.wires.size() != 0) {
-		std::fprintf(stderr, "expected 0 wires, got %zu\n", schematic.wires.size());
+	if (schematic.wires.size() != 2) {
+		std::fprintf(stderr, "expected 2 wires (button output net + inverter output net), got %zu\n",
+				schematic.wires.size());
 		return 1;
 	}
 	if (schematic.component_instances.size() != 3) {
-		std::fprintf(stderr, "expected 3 components, got %zu\n", schematic.component_instances.size());
+		std::fprintf(stderr, "expected 3 components (button + opin + inverter), got %zu\n",
+				schematic.component_instances.size());
 		return 1;
 	}
 	const bool has_button_symbol = any_component_symref_starts_with(schematic.component_instances, "button.sym");
 	const bool has_opin_symbol = any_component_symref_starts_with(schematic.component_instances, "opin.sym");
-	const bool has_ipin_symbol = any_component_symref_starts_with(schematic.component_instances, "ipin.sym");
-	if (!(has_button_symbol && has_opin_symbol && has_ipin_symbol)) {
-		std::fprintf(stderr, "missing expected symrefs (button/opin/ipin)\n");
+	const bool has_inverter_symbol = any_component_symref_starts_with(schematic.component_instances, "sky130_stdcells/inv_1.sym");
+	if (!(has_button_symbol && has_opin_symbol && has_inverter_symbol)) {
+		std::fprintf(stderr, "missing expected symrefs (button/opin/inverter)\n");
 		return 1;
 	}
 

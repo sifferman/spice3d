@@ -16,9 +16,8 @@ const FAKE_PROC_MEMINFO_TEXT_FOR_NGSPICE_BUFFER_SIZING = [
 let ngspiceWebAssemblyModule = null;
 let ngspiceSendCommand = null;
 let orderedNodeNamesFromLatestInit = null;
-let bufferedSampleCountSinceLastFlush = 0;
-
-const SAMPLE_BUFFER_FLUSH_INTERVAL_IN_SAMPLES = 16;
+let wallClockMillisecondsAtLastForwardedSample = 0;
+let minimumWallClockMillisecondsBetweenForwardedSamples = 33;
 
 function postWorkerErrorMessage(errorText) {
 	self.postMessage({ messageKind: 'error', errorText: errorText });
@@ -91,9 +90,14 @@ function registerSharedspiceCallbacksWithNgspice() {
 			'iiiiii');
 	const sendDataCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
 			function publishSimulationSample(allVectorValuesPointer, vectorCount, libraryInstanceId, userDataPointer) {
+				const currentWallClockMilliseconds = (typeof performance !== 'undefined' && performance.now)
+						? performance.now()
+						: Date.now();
+				const millisecondsSinceLastForward = currentWallClockMilliseconds - wallClockMillisecondsAtLastForwardedSample;
+				if (millisecondsSinceLastForward < minimumWallClockMillisecondsBetweenForwardedSamples) return 0;
+				wallClockMillisecondsAtLastForwardedSample = currentWallClockMilliseconds;
 				const sample = readVecValuesAllStructIntoSample(allVectorValuesPointer);
 				postSimulationSampleMessage(sample.simulationTimeSeconds, sample.orderedNodeVoltages);
-				bufferedSampleCountSinceLastFlush = (bufferedSampleCountSinceLastFlush + 1) % SAMPLE_BUFFER_FLUSH_INTERVAL_IN_SAMPLES;
 				return 0;
 			},
 			'iiiii');
@@ -136,6 +140,7 @@ function feedNetlistLinesIntoNgspice(netlistLines) {
 
 function handleLoadNetlistMessage(incomingMessage) {
 	feedNetlistLinesIntoNgspice(incomingMessage.netlistLines || []);
+	ngspiceSendCommand('save none');
 }
 
 function handleStartTransientMessage(incomingMessage) {
@@ -144,6 +149,33 @@ function handleStartTransientMessage(incomingMessage) {
 			+ Number(incomingMessage.stopTimeSeconds);
 	ngspiceSendCommand(transientCommand);
 	ngspiceSendCommand('bg_run');
+}
+
+function handleInstallFileTextMessage(incomingMessage) {
+	const virtualPath = String(incomingMessage.virtualPath || '');
+	const fileContent = String(incomingMessage.fileContent || '');
+	if (virtualPath.length === 0) return;
+	const lastSlashIndex = virtualPath.lastIndexOf('/');
+	if (lastSlashIndex > 0) {
+		const parentDirectoryPath = virtualPath.substring(0, lastSlashIndex);
+		try {
+			ngspiceWebAssemblyModule.FS.mkdirTree(parentDirectoryPath);
+		} catch (mkdirTreeError) {
+			postWorkerErrorMessage('mkdirTree(' + parentDirectoryPath + ') failed: ' + mkdirTreeError.message);
+			return;
+		}
+	}
+	try {
+		ngspiceWebAssemblyModule.FS.writeFile(virtualPath, fileContent);
+	} catch (writeFileError) {
+		postWorkerErrorMessage('writeFile(' + virtualPath + ') failed: ' + writeFileError.message);
+	}
+}
+
+function handleSetSampleThrottleMessage(incomingMessage) {
+	const requestedHz = Number(incomingMessage.maxSamplesPerSecond);
+	if (!isFinite(requestedHz) || requestedHz <= 0) return;
+	minimumWallClockMillisecondsBetweenForwardedSamples = 1000 / requestedHz;
 }
 
 function handleHaltMessage() {
@@ -168,6 +200,8 @@ self.addEventListener('message', function handleHostMessage(messageEvent) {
 		case 'startTransient':      handleStartTransientMessage(incomingMessage); break;
 		case 'halt':                handleHaltMessage(); break;
 		case 'externalVoltage':     handleExternalVoltageMessage(incomingMessage); break;
+		case 'installFileText':     handleInstallFileTextMessage(incomingMessage); break;
+		case 'setSampleThrottle':   handleSetSampleThrottleMessage(incomingMessage); break;
 		default:
 			postWorkerErrorMessage('unknown messageKind: ' + incomingMessage.messageKind);
 	}

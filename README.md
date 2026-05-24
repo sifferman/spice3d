@@ -5,9 +5,7 @@ Built on Godot (C++ GDExtension), [libngspice](https://ngspice.sourceforge.io/)
 compiled to WebAssembly, and [xschem](https://xschem.sourceforge.io/) for
 schematic input.
 
-The design document (concept, architecture, threading model, PDK strategy,
-roadmap) lives in [`../spice3d_notes/README.md`](../spice3d_notes/README.md).
-This README only documents how to build/run what's in *this* repository.
+This README documents how to build/run what's in *this* repository.
 
 ## Status
 

@@ -52,6 +52,7 @@ func _ready() -> void:
 			"",
 			extra_symbol_search_directories)
 	update_status_text(spice3d_root_node, loaded_schematic)
+	stage_sky130_pdk_files_into_web_simulator_filesystem(spice3d_root_node, sky130_ciel_version)
 	push_spice_netlist_and_start_transient_on_web_simulator(
 			spice3d_root_node,
 			staged_top_schematic_absolute_path,
@@ -59,9 +60,15 @@ func _ready() -> void:
 
 
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
-const TRANSIENT_TIMESTEP_SECONDS := 5.0e-9
-const TRANSIENT_STOP_TIME_SECONDS := 5.0e-6
+const TRANSIENT_TIMESTEP_SECONDS := 1.0e-6
+const TRANSIENT_STOP_TIME_SECONDS_EFFECTIVELY_FOREVER := 1.0e6
 const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.1
+const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 30.0
+
+const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
+const SKY130_PDK_LIB_CORNER_NAME := "tt"
+const SKY130_PDK_SOURCE_DIR_RELATIVE_TO_CIEL_ROOT := "/sky130A/libs.tech/combined"
+const SKY130_PDK_VIRTUAL_DIR_INSIDE_WORKER := "/sky130A/libs.tech/combined"
 
 var pressed_button_high_state_by_instance_name: Dictionary = {}
 var spice3d_root_node_for_sample_polling: Node = null
@@ -80,6 +87,73 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 				button_instance_name, new_voltage_for_button)
 
 
+func stage_sky130_pdk_files_into_web_simulator_filesystem(
+		spice3d_root_node: Node,
+		sky130_ciel_version: String) -> void:
+	var pdk_filesystem_root_path := absolute_path_for_sky130_local_cache_root(sky130_ciel_version)
+	var pdk_combined_models_source_directory_path := pdk_filesystem_root_path + SKY130_PDK_SOURCE_DIR_RELATIVE_TO_CIEL_ROOT
+	var staged_file_count := stage_text_files_recursively_into_worker_filesystem(
+			spice3d_root_node,
+			pdk_combined_models_source_directory_path,
+			SKY130_PDK_VIRTUAL_DIR_INSIDE_WORKER)
+	print("[spice3d] staged %d sky130 PDK file(s) into worker MEMFS" % staged_file_count)
+
+
+func stage_text_files_recursively_into_worker_filesystem(
+		spice3d_root_node: Node,
+		real_source_directory_absolute_path: String,
+		virtual_destination_directory_path_inside_worker: String) -> int:
+	var directory_handle := DirAccess.open(real_source_directory_absolute_path)
+	if directory_handle == null:
+		push_warning("[spice3d] cannot open '%s' for PDK staging" % real_source_directory_absolute_path)
+		return 0
+	directory_handle.list_dir_begin()
+	var staged_file_count := 0
+	while true:
+		var one_entry_name := directory_handle.get_next()
+		if one_entry_name.is_empty():
+			break
+		if one_entry_name.begins_with("."):
+			continue
+		var one_entry_real_path := real_source_directory_absolute_path + "/" + one_entry_name
+		var one_entry_virtual_path := virtual_destination_directory_path_inside_worker + "/" + one_entry_name
+		if directory_handle.current_is_dir():
+			staged_file_count += stage_text_files_recursively_into_worker_filesystem(
+					spice3d_root_node, one_entry_real_path, one_entry_virtual_path)
+			continue
+		var one_file_handle := FileAccess.open(one_entry_real_path, FileAccess.READ)
+		if one_file_handle == null:
+			continue
+		var one_file_text_content := one_file_handle.get_as_text()
+		one_file_handle.close()
+		spice3d_root_node.install_file_text_in_web_simulator_filesystem(
+				one_entry_virtual_path, one_file_text_content)
+		staged_file_count += 1
+	directory_handle.list_dir_end()
+	return staged_file_count
+
+
+func prepend_pdk_library_include_to_netlist_lines(netlist_lines: PackedStringArray) -> PackedStringArray:
+	var augmented_netlist_lines := PackedStringArray()
+	var inserted_pdk_lib_directive := false
+	for one_existing_line in netlist_lines:
+		augmented_netlist_lines.append(one_existing_line)
+		if not inserted_pdk_lib_directive and one_existing_line.begins_with(".subckt"):
+			augmented_netlist_lines.append(
+					".lib %s %s" % [
+						SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
+						SKY130_PDK_LIB_CORNER_NAME])
+			inserted_pdk_lib_directive = true
+	if not inserted_pdk_lib_directive:
+		var lines_with_lib_at_top := PackedStringArray()
+		lines_with_lib_at_top.append(".lib %s %s" % [
+				SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
+				SKY130_PDK_LIB_CORNER_NAME])
+		lines_with_lib_at_top.append_array(augmented_netlist_lines)
+		augmented_netlist_lines = lines_with_lib_at_top
+	return augmented_netlist_lines
+
+
 func push_spice_netlist_and_start_transient_on_web_simulator(
 		spice3d_root_node: Node,
 		staged_top_schematic_absolute_path: String,
@@ -90,10 +164,13 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	if netlist_lines.is_empty():
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
-	print("[spice3d] generated netlist with %d lines" % netlist_lines.size())
-	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines)
+	var netlist_lines_with_pdk_include := prepend_pdk_library_include_to_netlist_lines(netlist_lines)
+	print("[spice3d] generated netlist with %d lines (after PDK include: %d)" % [
+			netlist_lines.size(), netlist_lines_with_pdk_include.size()])
+	spice3d_root_node.set_simulation_sample_throttle_on_web_simulator(SIMULATION_SAMPLE_FORWARD_RATE_HZ)
+	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines_with_pdk_include)
 	spice3d_root_node.start_transient_analysis_on_web_simulator(
-			TRANSIENT_TIMESTEP_SECONDS, TRANSIENT_STOP_TIME_SECONDS)
+			TRANSIENT_TIMESTEP_SECONDS, TRANSIENT_STOP_TIME_SECONDS_EFFECTIVELY_FOREVER)
 
 
 func _process(delta_seconds_since_last_frame: float) -> void:
