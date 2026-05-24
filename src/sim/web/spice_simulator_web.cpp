@@ -16,32 +16,7 @@ void evaluate_browser_javascript(const char *javascript_source_text) {
 } // namespace
 #endif
 
-WebWorkerSpiceSimulator::WebWorkerSpiceSimulator() {
-#ifdef WEB_ENABLED
-	evaluate_browser_javascript(R"JS(
-if (!globalThis.spice3d) {
-	globalThis.spice3d = {
-		ready: false,
-		pendingExternalVoltagesByLowercaseName: {},
-		bufferedSimulationSamples: [],
-		nodeNames: null,
-		isSimulationRunning: false,
-		loadNetlistLines: function(netlistLines) { return false; },
-		startTransientAnalysis: function(stepSeconds, stopSeconds) { return false; },
-		stopSimulation: function() {},
-		setExternalVoltageSource: function(sourceName, volts) {
-			this.pendingExternalVoltagesByLowercaseName[sourceName.toLowerCase()] = volts;
-		},
-		takeBufferedSimulationSamples: function() {
-			const drained = this.bufferedSimulationSamples;
-			this.bufferedSimulationSamples = [];
-			return drained;
-		},
-	};
-}
-)JS");
-#endif
-}
+WebWorkerSpiceSimulator::WebWorkerSpiceSimulator() = default;
 
 WebWorkerSpiceSimulator::~WebWorkerSpiceSimulator() {
 	stop_simulation();
