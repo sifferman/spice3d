@@ -7,7 +7,7 @@ static func format_seconds_with_si_prefix(seconds_value: float, significant_digi
 	var sign_prefix := "-" if seconds_value < 0.0 else ""
 	var absolute_seconds := absf(seconds_value)
 	if absolute_seconds == 0.0:
-		return "0 s"
+		return "0s"
 	var unit_suffix := ""
 	var scaled_value := 0.0
 	if absolute_seconds >= 1.0:
@@ -30,4 +30,4 @@ static func format_seconds_with_si_prefix(seconds_value: float, significant_digi
 		scaled_value = absolute_seconds * 1.0e15
 	var integer_digit_count := 1 if scaled_value < 10.0 else (2 if scaled_value < 100.0 else 3)
 	var fractional_digit_count: int = maxi(0, significant_digits - integer_digit_count)
-	return "%s%.*f %s" % [sign_prefix, fractional_digit_count, scaled_value, unit_suffix]
+	return "%s%.*f%s" % [sign_prefix, fractional_digit_count, scaled_value, unit_suffix]

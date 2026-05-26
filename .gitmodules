@@ -9,7 +9,8 @@
 	url = https://github.com/facebook/zstd.git
 [submodule "third_party/ngspice"]
 	path = third_party/ngspice
-	url = https://git.code.sf.net/p/ngspice/ngspice
+	url = https://github.com/sifferman/ngspice.git
+	branch = tran-init-optimizations
 [submodule "third_party/gut"]
 	path = third_party/gut
 	url = https://github.com/bitwes/Gut.git
