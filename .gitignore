@@ -64,6 +64,7 @@ CMakeUserPresets.json
 # Standalone test binary + build-web export
 test/test_schematic_loader
 build-web/
+build-web-local/
 
 # Claude Code session state
 .claude/
