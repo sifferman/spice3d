@@ -344,6 +344,23 @@ const SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH := [
 	"V_SPICE3D_TESTBENCH_VNB  VNB  0 DC 0",
 ]
 
+# Loosened solver tolerances for digital-only visualization. ngspice's
+# defaults (reltol=1e-3, abstol=1e-12 A, vntol=1e-6 V) are tuned for
+# analog-precise BJT/MOSFET DC operating points; for a circuit whose only
+# visible output is wire-color thresholding around vdd/2, we accept ~mV
+# voltage and ~10nA current errors in exchange for 2-3x fewer Newton
+# iterations per timestep through digital transitions. The wire-color
+# threshold lives at ~900 mV so mV-scale noise is invisible. trtol=50
+# (vs default 7) lets the transient-LTE controller use larger internal
+# steps when local truncation error is acceptable.
+const NGSPICE_DOT_OPTION_LINES_FOR_DIGITAL_VISUALIZATION_PRESET := [
+	".option reltol=1e-2",
+	".option abstol=1e-8",
+	".option vntol=1e-3",
+	".option chgtol=1e-12",
+	".option trtol=50",
+]
+
 
 
 
@@ -478,6 +495,8 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 	top_level_testbench_lines.append(".include %s"
 			% SKY130_FD_SC_HD_CONSOLIDATED_SPICE_VIRTUAL_PATH_IN_WORKER)
 	top_level_testbench_lines.append_array(
+			PackedStringArray(NGSPICE_DOT_OPTION_LINES_FOR_DIGITAL_VISUALIZATION_PRESET))
+	top_level_testbench_lines.append_array(
 			PackedStringArray(SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH))
 	var output_net_names_to_load_with_fo4_capacitor := PackedStringArray()
 	var raw_xschem_netlist_contained_a_dot_end_directive := false
@@ -525,7 +544,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-S: self-paced worker; compute-saturation warning")
+	print("[spice3d] BUILD-MARKER 2026-05-26-T: digital-visualization solver-tolerance preset")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
