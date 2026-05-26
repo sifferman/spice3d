@@ -525,7 +525,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-O: flush queue on T-change; cap queue at 2s of buffering")
+	print("[spice3d] BUILD-MARKER 2026-05-26-P: per-frame timing diagnostic")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
@@ -541,35 +541,101 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 			internal_net_names_to_seed_at_half_vdd)
 
 
+var frame_timing_frames_since_last_report: int = 0
+var frame_timing_drain_total_microseconds: int = 0
+var frame_timing_playback_total_microseconds: int = 0
+var frame_timing_largest_single_drain_microseconds: int = 0
+var frame_timing_largest_single_playback_microseconds: int = 0
+var frame_timing_samples_drained_total: int = 0
+var frame_timing_samples_played_back_total: int = 0
+var frame_timing_largest_queue_size_observed: int = 0
+
+
 func _process(delta_seconds_since_last_frame: float) -> void:
 	if spice3d_root_node_for_sample_polling == null:
 		return
-	drain_new_simulator_samples_into_playback_queue()
-	step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
+	var drain_phase_start_microseconds := Time.get_ticks_usec()
+	var samples_drained_count := drain_new_simulator_samples_into_playback_queue_and_return_count()
+	var drain_phase_end_microseconds := Time.get_ticks_usec()
+	var samples_played_back_count := step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(
 			delta_seconds_since_last_frame)
+	var playback_phase_end_microseconds := Time.get_ticks_usec()
+	accumulate_per_frame_timing_diagnostic(
+			drain_phase_end_microseconds - drain_phase_start_microseconds,
+			playback_phase_end_microseconds - drain_phase_end_microseconds,
+			samples_drained_count,
+			samples_played_back_count,
+			queued_samples_awaiting_playback_to_wires.size())
 
 
-func drain_new_simulator_samples_into_playback_queue() -> void:
+const FRAME_TIMING_DIAGNOSTIC_REPORT_INTERVAL_FRAMES: int = 60
+
+
+func accumulate_per_frame_timing_diagnostic(
+		drain_microseconds: int,
+		playback_microseconds: int,
+		samples_drained_count: int,
+		samples_played_back_count: int,
+		queue_size_after_this_frame: int) -> void:
+	frame_timing_frames_since_last_report += 1
+	frame_timing_drain_total_microseconds += drain_microseconds
+	frame_timing_playback_total_microseconds += playback_microseconds
+	frame_timing_samples_drained_total += samples_drained_count
+	frame_timing_samples_played_back_total += samples_played_back_count
+	if drain_microseconds > frame_timing_largest_single_drain_microseconds:
+		frame_timing_largest_single_drain_microseconds = drain_microseconds
+	if playback_microseconds > frame_timing_largest_single_playback_microseconds:
+		frame_timing_largest_single_playback_microseconds = playback_microseconds
+	if queue_size_after_this_frame > frame_timing_largest_queue_size_observed:
+		frame_timing_largest_queue_size_observed = queue_size_after_this_frame
+	if frame_timing_frames_since_last_report < FRAME_TIMING_DIAGNOSTIC_REPORT_INTERVAL_FRAMES:
+		return
+	var average_drain_microseconds: float = float(frame_timing_drain_total_microseconds) / float(frame_timing_frames_since_last_report)
+	var average_playback_microseconds: float = float(frame_timing_playback_total_microseconds) / float(frame_timing_frames_since_last_report)
+	print(("[spice3d] frame-timing (last %d frames): "
+			+ "drain avg=%.2fms max=%.2fms, "
+			+ "playback avg=%.2fms max=%.2fms, "
+			+ "samples drained=%d played=%d, peak queue=%d") % [
+		frame_timing_frames_since_last_report,
+		average_drain_microseconds / 1000.0,
+		float(frame_timing_largest_single_drain_microseconds) / 1000.0,
+		average_playback_microseconds / 1000.0,
+		float(frame_timing_largest_single_playback_microseconds) / 1000.0,
+		frame_timing_samples_drained_total,
+		frame_timing_samples_played_back_total,
+		frame_timing_largest_queue_size_observed])
+	frame_timing_frames_since_last_report = 0
+	frame_timing_drain_total_microseconds = 0
+	frame_timing_playback_total_microseconds = 0
+	frame_timing_largest_single_drain_microseconds = 0
+	frame_timing_largest_single_playback_microseconds = 0
+	frame_timing_samples_drained_total = 0
+	frame_timing_samples_played_back_total = 0
+	frame_timing_largest_queue_size_observed = 0
+
+
+func drain_new_simulator_samples_into_playback_queue_and_return_count() -> int:
 	var drained_samples: Array = spice3d_root_node_for_sample_polling.drain_buffered_simulation_samples_from_web_simulator()
 	if drained_samples.is_empty():
-		return
+		return 0
 	queued_samples_awaiting_playback_to_wires.append_array(drained_samples)
 	if queued_samples_awaiting_playback_to_wires.size() > MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES:
 		var overflow_count: int = queued_samples_awaiting_playback_to_wires.size() - MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES
 		queued_samples_awaiting_playback_to_wires = queued_samples_awaiting_playback_to_wires.slice(overflow_count)
+	return drained_samples.size()
 
 
-func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
-		delta_seconds_since_last_frame: float) -> void:
+func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(
+		delta_seconds_since_last_frame: float) -> int:
 	wall_clock_seconds_accumulated_since_last_playback_step += delta_seconds_since_last_frame
 	if wall_clock_seconds_accumulated_since_last_playback_step < compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp():
-		return
+		return 0
 	wall_clock_seconds_accumulated_since_last_playback_step = 0.0
 	if queued_samples_awaiting_playback_to_wires.is_empty():
-		return
+		return 0
 	var next_sample_to_play_back = queued_samples_awaiting_playback_to_wires.pop_front()
 	if not (next_sample_to_play_back is Dictionary) or not next_sample_to_play_back.has("nodeVoltagesByName"):
-		return
+		return 0
 	var node_voltages_by_name: Dictionary = next_sample_to_play_back["nodeVoltagesByName"]
 	if not has_logged_first_simulation_sample_node_names:
 		print("[spice3d] first sample node names: %s" % str(node_voltages_by_name.keys()))
@@ -618,6 +684,7 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 			spice3d_root_node_pending_ready_transition_on_first_sample = null
 			loaded_schematic_pending_ready_transition_on_first_sample = {}
 			is_simulator_ready_to_accept_button_clicks = true
+	return 1
 
 
 func resolve_latest_sky130_ciel_version_from_manifest_with_fallback() -> String:
