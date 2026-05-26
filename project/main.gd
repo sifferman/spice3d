@@ -177,8 +177,11 @@ const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
 # we recompute the wall-clock spacing between sample-playback steps so the
 # fixed-size ngspice tran replays at the chosen pace.
 const TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE := 1000.0
-const TIME_WARP_DEFAULT_INPUT_TEXT := "1 ns"
-const TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND := 1.0e-9
+# Picked so a sky130 stdcell's ~30 ps tpd unfolds over ~300 ms wall — clearly
+# visible at 60 fps without being agonizingly slow. At the previous default
+# of 1 ns/s the same transient compressed into ~1 frame and read as a step.
+const TIME_WARP_DEFAULT_INPUT_TEXT := "100 ps"
+const TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND := 100.0e-12
 
 const STATUS_BACKGROUND_COLOR_WHILE_SIMULATOR_LOADING := Color(0.65, 0.3, 0.0, 0.75)
 const STATUS_BACKGROUND_COLOR_AFTER_SIMULATOR_READY := Color(0.0, 0.0, 0.0, 0.55)
