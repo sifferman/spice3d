@@ -525,7 +525,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-P: per-frame timing diagnostic")
+	print("[spice3d] BUILD-MARKER 2026-05-26-Q: per-frame timing with fps + per-second rates")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
@@ -549,6 +549,7 @@ var frame_timing_largest_single_playback_microseconds: int = 0
 var frame_timing_samples_drained_total: int = 0
 var frame_timing_samples_played_back_total: int = 0
 var frame_timing_largest_queue_size_observed: int = 0
+var frame_timing_wall_clock_microseconds_at_window_start: int = 0
 
 
 func _process(delta_seconds_since_last_frame: float) -> void:
@@ -577,6 +578,8 @@ func accumulate_per_frame_timing_diagnostic(
 		samples_drained_count: int,
 		samples_played_back_count: int,
 		queue_size_after_this_frame: int) -> void:
+	if frame_timing_frames_since_last_report == 0:
+		frame_timing_wall_clock_microseconds_at_window_start = Time.get_ticks_usec()
 	frame_timing_frames_since_last_report += 1
 	frame_timing_drain_total_microseconds += drain_microseconds
 	frame_timing_playback_total_microseconds += playback_microseconds
@@ -590,19 +593,35 @@ func accumulate_per_frame_timing_diagnostic(
 		frame_timing_largest_queue_size_observed = queue_size_after_this_frame
 	if frame_timing_frames_since_last_report < FRAME_TIMING_DIAGNOSTIC_REPORT_INTERVAL_FRAMES:
 		return
+	var wall_clock_seconds_for_this_window: float = (
+			float(Time.get_ticks_usec() - frame_timing_wall_clock_microseconds_at_window_start)
+			/ 1.0e6)
+	var measured_frames_per_second: float = (
+			float(frame_timing_frames_since_last_report) / wall_clock_seconds_for_this_window
+			if wall_clock_seconds_for_this_window > 0.0 else 0.0)
+	var measured_samples_drained_per_second: float = (
+			float(frame_timing_samples_drained_total) / wall_clock_seconds_for_this_window
+			if wall_clock_seconds_for_this_window > 0.0 else 0.0)
+	var measured_samples_played_per_second: float = (
+			float(frame_timing_samples_played_back_total) / wall_clock_seconds_for_this_window
+			if wall_clock_seconds_for_this_window > 0.0 else 0.0)
 	var average_drain_microseconds: float = float(frame_timing_drain_total_microseconds) / float(frame_timing_frames_since_last_report)
 	var average_playback_microseconds: float = float(frame_timing_playback_total_microseconds) / float(frame_timing_frames_since_last_report)
-	print(("[spice3d] frame-timing (last %d frames): "
+	print(("[spice3d] frame-timing (%d frames in %.2fs = %.1f fps): "
 			+ "drain avg=%.2fms max=%.2fms, "
 			+ "playback avg=%.2fms max=%.2fms, "
-			+ "samples drained=%d played=%d, peak queue=%d") % [
+			+ "drained=%d (%.1f/s) played=%d (%.1f/s), peak queue=%d") % [
 		frame_timing_frames_since_last_report,
+		wall_clock_seconds_for_this_window,
+		measured_frames_per_second,
 		average_drain_microseconds / 1000.0,
 		float(frame_timing_largest_single_drain_microseconds) / 1000.0,
 		average_playback_microseconds / 1000.0,
 		float(frame_timing_largest_single_playback_microseconds) / 1000.0,
 		frame_timing_samples_drained_total,
+		measured_samples_drained_per_second,
 		frame_timing_samples_played_back_total,
+		measured_samples_played_per_second,
 		frame_timing_largest_queue_size_observed])
 	frame_timing_frames_since_last_report = 0
 	frame_timing_drain_total_microseconds = 0
