@@ -356,7 +356,14 @@ function handleLoadNetlistMessage(incomingMessage) {
 
 function handleSetTimeWarpMessage(incomingMessage) {
 	const requestedTimestepSeconds = Number(incomingMessage.timestepSeconds);
-	if (!isFinite(requestedTimestepSeconds) || requestedTimestepSeconds <= 0) return;
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'setTimeWarp received: requestedTimestepSeconds=' + requestedTimestepSeconds
+			+ ' (current=' + currentTransientTimestepInSeconds + ')');
+	if (!isFinite(requestedTimestepSeconds) || requestedTimestepSeconds <= 0) {
+		postNgspiceDiagnosticMessage('WorkerDiag',
+				'setTimeWarp rejected: timestep is not finite or not positive');
+		return;
+	}
 	chunkLoopShouldKeepRunning = false;
 	currentTransientTimestepInSeconds = requestedTimestepSeconds;
 	const snapshotInitialConditionLines = buildSnapshotInitialConditionLinesFromLastObservedSample();

@@ -158,6 +158,10 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 	print("[spice3d] time-warp set to %s sim-time per real-second (timestep=%s)" % [
 			SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
 			SiPrefixTime.format_seconds_with_si_prefix(compute_transient_timestep_seconds_for_current_time_warp())])
+	var discarded_old_pace_sample_count := queued_samples_awaiting_playback_to_wires.size()
+	queued_samples_awaiting_playback_to_wires.clear()
+	if discarded_old_pace_sample_count > 0:
+		print("[spice3d] discarded %d queued sample(s) from previous time-warp setting" % discarded_old_pace_sample_count)
 	if spice3d_root_node_for_sample_polling != null:
 		spice3d_root_node_for_sample_polling.update_time_warp_timestep_on_web_simulator(
 				compute_transient_timestep_seconds_for_current_time_warp())
@@ -203,6 +207,7 @@ func compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_w
 
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
 const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
+const MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES: int = 60
 
 # How much simulated time advances per second of wall clock — user-controlled
 # via the TimeWarpInput LineEdit at the bottom of the screen. The user types
@@ -520,7 +525,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-M: drop empty-+ continuations; bail loop on zero-sample chunks")
+	print("[spice3d] BUILD-MARKER 2026-05-26-O: flush queue on T-change; cap queue at 2s of buffering")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
@@ -549,6 +554,9 @@ func drain_new_simulator_samples_into_playback_queue() -> void:
 	if drained_samples.is_empty():
 		return
 	queued_samples_awaiting_playback_to_wires.append_array(drained_samples)
+	if queued_samples_awaiting_playback_to_wires.size() > MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES:
+		var overflow_count: int = queued_samples_awaiting_playback_to_wires.size() - MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES
+		queued_samples_awaiting_playback_to_wires = queued_samples_awaiting_playback_to_wires.slice(overflow_count)
 
 
 func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
