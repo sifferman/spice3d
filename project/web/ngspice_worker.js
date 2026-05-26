@@ -282,10 +282,15 @@ function loadAssembledDeckIntoNgspiceAndPrimeForChunking(initialConditionLines, 
 
 const MAXIMUM_CONSECUTIVE_ZERO_SAMPLE_CHUNKS_BEFORE_BAILING_OUT = 5;
 
+const THROUGHPUT_WARNING_WINDOW_MILLISECONDS = 5000;
+const THROUGHPUT_WARNING_RATIO_BELOW_TARGET = 0.7;
+
 let totalChunkCountSinceLastDeckLoad = 0;
 let totalSampleCountObservedSinceLastDeckLoad = 0;
 let consecutiveZeroSampleChunkCount = 0;
 let currentChunkLoopGenerationCounter = 0;
+let throughputWindowSampleCount = 0;
+let throughputWindowStartWallClockMilliseconds = 0;
 
 function runOneStepNChunkAndYield(thisChunkLoopGenerationId) {
 	if (thisChunkLoopGenerationId !== currentChunkLoopGenerationCounter) {
@@ -313,6 +318,23 @@ function runOneStepNChunkAndYield(thisChunkLoopGenerationId) {
 	} else {
 		consecutiveZeroSampleChunkCount = 0;
 	}
+	throughputWindowSampleCount += samplesEmittedThisChunk;
+	const throughputWindowElapsedMilliseconds = wallClockMillisecondsAfterStep - throughputWindowStartWallClockMilliseconds;
+	if (throughputWindowElapsedMilliseconds >= THROUGHPUT_WARNING_WINDOW_MILLISECONDS) {
+		const measuredSamplesPerSecond = (throughputWindowSampleCount * 1000.0) / throughputWindowElapsedMilliseconds;
+		const targetSamplesPerSecond = TARGET_NUMBER_OF_SAMPLES_PLAYED_BACK_PER_WALL_SECOND;
+		if (measuredSamplesPerSecond < targetSamplesPerSecond * THROUGHPUT_WARNING_RATIO_BELOW_TARGET) {
+			const measuredEffectiveTimeWarpSimSecondsPerRealSecond = measuredSamplesPerSecond * currentTransientTimestepInSeconds;
+			const requestedTimeWarpSimSecondsPerRealSecond = targetSamplesPerSecond * currentTransientTimestepInSeconds;
+			postNgspiceDiagnosticMessage('WorkerDiag',
+					'ngspice compute saturated: producing ' + measuredSamplesPerSecond.toFixed(1)
+					+ ' samples/s vs target ' + targetSamplesPerSecond
+					+ ' samples/s; effective time-warp ' + measuredEffectiveTimeWarpSimSecondsPerRealSecond.toExponential(2)
+					+ ' s sim per s real (requested ' + requestedTimeWarpSimSecondsPerRealSecond.toExponential(2) + ')');
+		}
+		throughputWindowSampleCount = 0;
+		throughputWindowStartWallClockMilliseconds = wallClockMillisecondsAfterStep;
+	}
 	if (totalChunkCountSinceLastDeckLoad <= 3 || samplesEmittedThisChunk === 0) {
 		postNgspiceDiagnosticMessage('WorkerDiag',
 				'chunk ' + totalChunkCountSinceLastDeckLoad + ': emitted '
@@ -328,9 +350,18 @@ function runOneStepNChunkAndYield(thisChunkLoopGenerationId) {
 		postRunningStateChangedMessage(false);
 		return;
 	}
+	// Self-paced: cap chunk rate at the design target only when ngspice was
+	// faster than that target. When ngspice is the bottleneck (high T, complex
+	// circuits), the chunk compute itself already exceeds the target interval,
+	// so adding setTimeout(200) on top of a 600 ms chunk wastes 200 ms we don't
+	// have. Fire next chunk immediately in that case — playback at the main
+	// thread will run as fast as samples arrive.
+	const millisecondsRemainingUntilNextChunkShouldFire = Math.max(
+			0,
+			WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS - wallClockMillisecondsThisChunk);
 	setTimeout(
 			runOneStepNChunkAndYield.bind(null, thisChunkLoopGenerationId),
-			WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS);
+			millisecondsRemainingUntilNextChunkShouldFire);
 }
 
 function startContinuousChunkLoop() {
@@ -343,6 +374,9 @@ function startContinuousChunkLoop() {
 	totalChunkCountSinceLastDeckLoad = 0;
 	totalSampleCountObservedSinceLastDeckLoad = 0;
 	consecutiveZeroSampleChunkCount = 0;
+	throughputWindowSampleCount = 0;
+	throughputWindowStartWallClockMilliseconds = (typeof performance !== 'undefined' && performance.now)
+			? performance.now() : Date.now();
 	chunkLoopShouldKeepRunning = true;
 	postRunningStateChangedMessage(true);
 	postNgspiceDiagnosticMessage('WorkerDiag',
