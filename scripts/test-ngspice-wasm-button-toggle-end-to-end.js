@@ -317,8 +317,61 @@ async function bootNgspiceAndRunButtonToggleEndToEndTest() {
 				+ propagation_delay_picoseconds.toFixed(2) + ' ps\n');
 	}
 
+	function failIfSampleSimTimesAreNotMonotonicAndSpanningExpectedWindow(
+			samples_array, human_phase_description) {
+		if (samples_array.length === 0) {
+			emitFailMessageAndExitWithFailureCode(
+					human_phase_description + ': zero samples returned from ngspice (transient never ran?)');
+		}
+		const first_sample_sim_time = samples_array[0].simulationTimeAtThisSample;
+		const last_sample_sim_time = samples_array[samples_array.length - 1].simulationTimeAtThisSample;
+		if (first_sample_sim_time !== 0) {
+			emitFailMessageAndExitWithFailureCode(
+					human_phase_description + ': first sample should be at sim time 0 (initial conditions), got '
+					+ first_sample_sim_time.toExponential(3));
+		}
+		const tolerated_sim_time_under_tran_stop_seconds = SIM_TRANSIENT_STOP_SECONDS * 0.5;
+		if (last_sample_sim_time < SIM_TRANSIENT_STOP_SECONDS - tolerated_sim_time_under_tran_stop_seconds) {
+			emitFailMessageAndExitWithFailureCode(
+					human_phase_description + ': last sample sim time should be ≈ tran_stop ('
+					+ SIM_TRANSIENT_STOP_SECONDS.toExponential(3) + ' s), got '
+					+ last_sample_sim_time.toExponential(3) + ' s — solver may have bailed early');
+		}
+		for (let sample_index = 1; sample_index < samples_array.length; ++sample_index) {
+			const previous_sim_time = samples_array[sample_index - 1].simulationTimeAtThisSample;
+			const current_sim_time = samples_array[sample_index].simulationTimeAtThisSample;
+			if (current_sim_time < previous_sim_time) {
+				emitFailMessageAndExitWithFailureCode(
+						human_phase_description + ': sample sim times must be monotonically non-decreasing; '
+						+ 'sample ' + (sample_index - 1) + ' at t=' + previous_sim_time.toExponential(3)
+						+ ' followed by sample ' + sample_index + ' at t=' + current_sim_time.toExponential(3));
+			}
+		}
+		const expected_sample_count_lower_bound = Math.floor(
+				(SIM_TRANSIENT_STOP_SECONDS / SIM_TRANSIENT_TIMESTEP_SECONDS) * 0.5);
+		const expected_sample_count_upper_bound = Math.ceil(
+				(SIM_TRANSIENT_STOP_SECONDS / SIM_TRANSIENT_TIMESTEP_SECONDS) * 3.0);
+		if (samples_array.length < expected_sample_count_lower_bound
+				|| samples_array.length > expected_sample_count_upper_bound) {
+			emitFailMessageAndExitWithFailureCode(
+					human_phase_description + ': sample count ' + samples_array.length
+					+ ' is outside expected range [' + expected_sample_count_lower_bound
+					+ ', ' + expected_sample_count_upper_bound
+					+ '] for tran_stop=' + SIM_TRANSIENT_STOP_SECONDS.toExponential(3)
+					+ ' s / timestep=' + SIM_TRANSIENT_TIMESTEP_SECONDS.toExponential(3) + ' s. '
+					+ 'A count near the lower bound suggests ngspice ignored tmax; '
+					+ 'a count near zero suggests the netlist failed to load.');
+		}
+		process.stdout.write('  ' + human_phase_description + ' sim-time window: ['
+				+ first_sample_sim_time.toExponential(2) + ', '
+				+ last_sample_sim_time.toExponential(2) + '] s, '
+				+ samples_array.length + ' samples\n');
+	}
+
 	// Phase 1: source held at 0 V — verify the inverter is at the "high" steady state.
 	const phase_one_samples = runOneEventDrivenTransientAndReturnCapturedSamples();
+	failIfSampleSimTimesAreNotMonotonicAndSpanningExpectedWindow(
+			phase_one_samples, 'phase 1 (vbutton=0)');
 	failIfFinalSteadyStateVoltageIsNotApproximatelyExpected(
 			phase_one_samples, 'net1', 0.0, 'phase 1 (vbutton=0)');
 	failIfFinalSteadyStateVoltageIsNotApproximatelyExpected(
@@ -328,6 +381,8 @@ async function bootNgspiceAndRunButtonToggleEndToEndTest() {
 	// and propagation delay is realistic.
 	externalVoltageSourceStateByLowercaseName['vbutton1'].valueAfterStep = VDD_VOLTS;
 	const phase_two_samples = runOneEventDrivenTransientAndReturnCapturedSamples();
+	failIfSampleSimTimesAreNotMonotonicAndSpanningExpectedWindow(
+			phase_two_samples, 'phase 2 (vbutton=VDD)');
 	failIfFinalSteadyStateVoltageIsNotApproximatelyExpected(
 			phase_two_samples, 'net1', VDD_VOLTS, 'phase 2 (vbutton=VDD)');
 	failIfFinalSteadyStateVoltageIsNotApproximatelyExpected(
@@ -340,6 +395,8 @@ async function bootNgspiceAndRunButtonToggleEndToEndTest() {
 	// and propagation delay is again realistic.
 	externalVoltageSourceStateByLowercaseName['vbutton1'].valueAfterStep = 0.0;
 	const phase_three_samples = runOneEventDrivenTransientAndReturnCapturedSamples();
+	failIfSampleSimTimesAreNotMonotonicAndSpanningExpectedWindow(
+			phase_three_samples, 'phase 3 (vbutton=0 again)');
 	failIfFinalSteadyStateVoltageIsNotApproximatelyExpected(
 			phase_three_samples, 'net1', 0.0, 'phase 3 (vbutton=0 again)');
 	failIfFinalSteadyStateVoltageIsNotApproximatelyExpected(

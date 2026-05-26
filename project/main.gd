@@ -104,8 +104,8 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 		return
 	currently_selected_time_warp_simulated_seconds_per_real_second = parsed_simulated_seconds_per_real_second
 	print("[spice3d] time-warp set to %s sim seconds per real second (timestep=%s s)" % [
-			str(currently_selected_time_warp_simulated_seconds_per_real_second),
-			str(compute_transient_timestep_seconds_for_current_time_warp())])
+			String.num_scientific(currently_selected_time_warp_simulated_seconds_per_real_second),
+			String.num_scientific(compute_transient_timestep_seconds_for_current_time_warp())])
 	if spice3d_root_node_for_sample_polling != null:
 		spice3d_root_node_for_sample_polling.start_transient_analysis_on_web_simulator(
 				compute_transient_timestep_seconds_for_current_time_warp(),
@@ -259,8 +259,8 @@ func reset_per_click_animation_diagnostic_counters_for_a_new_click(human_event_d
 	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = true
 	print("[spice3d] click-anim-begin: %s (T=%s sim-s/real-s, timestep=%s s)" % [
 		human_event_description,
-		str(currently_selected_time_warp_simulated_seconds_per_real_second),
-		str(compute_transient_timestep_seconds_for_current_time_warp())])
+		String.num_scientific(currently_selected_time_warp_simulated_seconds_per_real_second),
+		String.num_scientific(compute_transient_timestep_seconds_for_current_time_warp())])
 
 
 func log_per_click_animation_summary_if_pending() -> void:
@@ -278,8 +278,8 @@ func log_per_click_animation_summary_if_pending() -> void:
 		per_click_diagnostic_animation_total_samples_played_back_since_last_click,
 		animation_wall_clock_duration_seconds,
 		expected_wall_clock_duration_seconds,
-		str(currently_selected_time_warp_simulated_seconds_per_real_second),
-		str(TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)])
+		String.num_scientific(currently_selected_time_warp_simulated_seconds_per_real_second),
+		String.num_scientific(TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)])
 	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = false
 
 
@@ -463,7 +463,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-D: throttle bypassed above Firefox's perf.now() floor")
+	print("[spice3d] BUILD-MARKER 2026-05-26-E: scientific-notation log timestamps + pacing tests")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size()])
 	print("[spice3d] ----- full testbench netlist sent to ngspice -----")
@@ -527,7 +527,7 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 			remaining_initial_samples_to_log_key_voltages_for -= 1
 		var sim_time_seconds: float = next_sample_to_play_back.get("simulationTimeSeconds", 0.0)
 		print("[spice3d] played-back sample t=%ss net1=%f btn_out_n=%f remaining_in_queue=%d" % [
-				str(sim_time_seconds),
+				String.num_scientific(sim_time_seconds),
 				current_net1_voltage_volts,
 				current_btn_out_n_voltage_volts,
 				queued_samples_awaiting_playback_to_wires.size()])
