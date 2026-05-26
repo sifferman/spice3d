@@ -285,8 +285,12 @@ const MAXIMUM_CONSECUTIVE_ZERO_SAMPLE_CHUNKS_BEFORE_BAILING_OUT = 5;
 let totalChunkCountSinceLastDeckLoad = 0;
 let totalSampleCountObservedSinceLastDeckLoad = 0;
 let consecutiveZeroSampleChunkCount = 0;
+let currentChunkLoopGenerationCounter = 0;
 
-function runOneStepNChunkAndYield() {
+function runOneStepNChunkAndYield(thisChunkLoopGenerationId) {
+	if (thisChunkLoopGenerationId !== currentChunkLoopGenerationCounter) {
+		return;
+	}
 	if (!chunkLoopShouldKeepRunning) {
 		postRunningStateChangedMessage(false);
 		return;
@@ -324,18 +328,26 @@ function runOneStepNChunkAndYield() {
 		postRunningStateChangedMessage(false);
 		return;
 	}
-	setTimeout(runOneStepNChunkAndYield, WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS);
+	setTimeout(
+			runOneStepNChunkAndYield.bind(null, thisChunkLoopGenerationId),
+			WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS);
 }
 
 function startContinuousChunkLoop() {
-	if (chunkLoopShouldKeepRunning) return;
+	// Increment the generation BEFORE setting chunkLoopShouldKeepRunning so any
+	// already-scheduled setTimeout from a previous loop sees a stale generation
+	// id when it fires and exits without doing work. Without this, a T-change
+	// or click+reload spawns a parallel chunk loop that doubles ngspice's output
+	// rate and saturates the playback queue with samples we then have to drop.
+	currentChunkLoopGenerationCounter += 1;
 	totalChunkCountSinceLastDeckLoad = 0;
 	totalSampleCountObservedSinceLastDeckLoad = 0;
 	consecutiveZeroSampleChunkCount = 0;
 	chunkLoopShouldKeepRunning = true;
 	postRunningStateChangedMessage(true);
-	postNgspiceDiagnosticMessage('WorkerDiag', 'starting continuous chunk loop');
-	setTimeout(runOneStepNChunkAndYield, 0);
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'starting continuous chunk loop (generation ' + currentChunkLoopGenerationCounter + ')');
+	setTimeout(runOneStepNChunkAndYield.bind(null, currentChunkLoopGenerationCounter), 0);
 }
 
 function handleLoadNetlistMessage(incomingMessage) {

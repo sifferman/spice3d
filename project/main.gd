@@ -525,7 +525,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-Q: per-frame timing with fps + per-second rates")
+	print("[spice3d] BUILD-MARKER 2026-05-26-R: chunk-loop generation counter; accumulator carryover")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
@@ -647,9 +647,14 @@ func drain_new_simulator_samples_into_playback_queue_and_return_count() -> int:
 func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(
 		delta_seconds_since_last_frame: float) -> int:
 	wall_clock_seconds_accumulated_since_last_playback_step += delta_seconds_since_last_frame
-	if wall_clock_seconds_accumulated_since_last_playback_step < compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp():
+	var wall_clock_seconds_per_sample_interval: float = compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
+	if wall_clock_seconds_accumulated_since_last_playback_step < wall_clock_seconds_per_sample_interval:
 		return 0
-	wall_clock_seconds_accumulated_since_last_playback_step = 0.0
+	# Subtract the interval instead of resetting to 0 so the fractional remainder
+	# carries forward; otherwise at 90 fps (delta ≈ 11 ms, interval = 33 ms) the
+	# accumulator hits threshold partway through every 3rd frame, pops, and
+	# discards ~11 ms of wall time — yielding ~22 samples/s instead of 30/s.
+	wall_clock_seconds_accumulated_since_last_playback_step -= wall_clock_seconds_per_sample_interval
 	if queued_samples_awaiting_playback_to_wires.is_empty():
 		return 0
 	var next_sample_to_play_back = queued_samples_awaiting_playback_to_wires.pop_front()
