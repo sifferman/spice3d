@@ -160,6 +160,9 @@ jobs:
             exit 1
           fi
 
+      - name: "Reject unsupported GDScript format specifiers (%e, %g)"
+        run: scripts/lint-gdscript-unsupported-format-specifiers.sh
+
       - name: "Run GUT headless unit tests (strict; fails on any ERROR line)"
         run: scripts/run-godot-tests-strict.sh
 

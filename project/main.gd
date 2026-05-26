@@ -308,8 +308,8 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 		if remaining_initial_samples_to_log_key_voltages_for > 0:
 			remaining_initial_samples_to_log_key_voltages_for -= 1
 		var sim_time_seconds: float = next_sample_to_play_back.get("simulationTimeSeconds", 0.0)
-		print("[spice3d] played-back sample t=%es net1=%f btn_out_n=%f remaining_in_queue=%d" % [
-				sim_time_seconds,
+		print("[spice3d] played-back sample t=%ss net1=%f btn_out_n=%f remaining_in_queue=%d" % [
+				str(sim_time_seconds),
 				current_net1_voltage_volts,
 				current_btn_out_n_voltage_volts,
 				queued_samples_awaiting_playback_to_wires.size()])
