@@ -280,8 +280,11 @@ function loadAssembledDeckIntoNgspiceAndPrimeForChunking(initialConditionLines, 
 	ngspiceSendCommand('save none');
 }
 
+const MAXIMUM_CONSECUTIVE_ZERO_SAMPLE_CHUNKS_BEFORE_BAILING_OUT = 5;
+
 let totalChunkCountSinceLastDeckLoad = 0;
 let totalSampleCountObservedSinceLastDeckLoad = 0;
+let consecutiveZeroSampleChunkCount = 0;
 
 function runOneStepNChunkAndYield() {
 	if (!chunkLoopShouldKeepRunning) {
@@ -301,12 +304,25 @@ function runOneStepNChunkAndYield() {
 	const samplesEmittedThisChunk = totalSampleCountObservedSinceLastDeckLoad - sampleCountBeforeThisChunk;
 	const wallClockMillisecondsThisChunk = wallClockMillisecondsAfterStep - wallClockMillisecondsBeforeStep;
 	totalChunkCountSinceLastDeckLoad += 1;
+	if (samplesEmittedThisChunk === 0) {
+		consecutiveZeroSampleChunkCount += 1;
+	} else {
+		consecutiveZeroSampleChunkCount = 0;
+	}
 	if (totalChunkCountSinceLastDeckLoad <= 3 || samplesEmittedThisChunk === 0) {
 		postNgspiceDiagnosticMessage('WorkerDiag',
 				'chunk ' + totalChunkCountSinceLastDeckLoad + ': emitted '
 				+ samplesEmittedThisChunk + ' sample(s) in '
 				+ wallClockMillisecondsThisChunk.toFixed(1) + ' ms (total samples: '
 				+ totalSampleCountObservedSinceLastDeckLoad + ')');
+	}
+	if (consecutiveZeroSampleChunkCount >= MAXIMUM_CONSECUTIVE_ZERO_SAMPLE_CHUNKS_BEFORE_BAILING_OUT) {
+		postNgspiceDiagnosticMessage('WorkerDiag',
+				'chunk loop bailing out after ' + consecutiveZeroSampleChunkCount
+				+ ' consecutive zero-sample chunks (deck likely failed to load or solver is stuck)');
+		chunkLoopShouldKeepRunning = false;
+		postRunningStateChangedMessage(false);
+		return;
 	}
 	setTimeout(runOneStepNChunkAndYield, WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS);
 }
@@ -315,6 +331,7 @@ function startContinuousChunkLoop() {
 	if (chunkLoopShouldKeepRunning) return;
 	totalChunkCountSinceLastDeckLoad = 0;
 	totalSampleCountObservedSinceLastDeckLoad = 0;
+	consecutiveZeroSampleChunkCount = 0;
 	chunkLoopShouldKeepRunning = true;
 	postRunningStateChangedMessage(true);
 	postNgspiceDiagnosticMessage('WorkerDiag', 'starting continuous chunk loop');

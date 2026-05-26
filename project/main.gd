@@ -451,12 +451,16 @@ func strip_empty_parameter_assignments_from_one_spice_line(spice_line: String) -
 	# expression, chaining `ad=as=(pd=(ps=...))` until something undefined like
 	# `nrd` aborts the Formula() evaluator. Stripping the empty assignments
 	# lets the model fall back to its built-in BSIM4 defaults, which are fine
-	# for digital simulation.
+	# for digital simulation. When the line is a `+`-continuation that ends up
+	# with no content after stripping, drop it entirely so we don't ship a
+	# meaningless naked `+` to ngspice.
 	var output_tokens := PackedStringArray()
 	for one_token in spice_line.split(" ", false):
 		if one_token.ends_with("="):
 			continue
 		output_tokens.append(one_token)
+	if output_tokens.size() == 1 and output_tokens[0] == "+":
+		return ""
 	return " ".join(output_tokens)
 
 
@@ -486,6 +490,8 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 			raw_xschem_netlist_contained_a_dot_end_directive = true
 			continue
 		var without_empty_param_assignments := strip_empty_parameter_assignments_from_one_spice_line(one_existing_line)
+		if without_empty_param_assignments.is_empty():
+			continue
 		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(without_empty_param_assignments)
 		top_level_testbench_lines.append(without_escape_backslashes)
 	for one_output_net_name in output_net_names_to_load_with_fo4_capacitor:
@@ -514,7 +520,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-L: strip empty xschem param assignments")
+	print("[spice3d] BUILD-MARKER 2026-05-26-M: drop empty-+ continuations; bail loop on zero-sample chunks")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
