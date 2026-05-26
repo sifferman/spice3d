@@ -88,6 +88,9 @@ jobs:
       - name: Verify SendChar diagnostics reach the host
         run: node scripts/test-ngspice-wasm-sendchar-surface.js
 
+      - name: Verify button-toggle end-to-end (skips without PDK_ROOT)
+        run: node scripts/test-ngspice-wasm-button-toggle-end-to-end.js
+
       - name: Run host-C++ unit tests (schematic loader, streaming zstd-tar extractor)
         run: make -C test run
 

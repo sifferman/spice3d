@@ -94,3 +94,28 @@ func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrappe
 			+ "(streaming extractor now pulls it from sky130_fd_sc_hd.tar.zst).")
 	assert_true(single_blob_for_inspection.contains("VPWR"),
 			"Rail definition for VPWR must be present in the testbench.")
+	assert_true(single_blob_for_inspection.contains("C_SPICE3D_FO4_LOAD_btn_out_n btn_out_n VGND 7.4f"),
+			"Every xschem output net (those with `*.PININFO <name>:O`) must get a 7.4 fF FO4 load "
+			+ "to VGND in the testbench. Without it the inverter drives a floating node and switches "
+			+ "in sub-picoseconds — physically true but unintuitive in animation.")
+	var lines_equal_to_end_directive_count := 0
+	for one_line in converted_lines:
+		if one_line.strip_edges() == ".end":
+			lines_equal_to_end_directive_count += 1
+	assert_eq(lines_equal_to_end_directive_count, 0,
+			"`.end` must be stripped from the converted testbench — ngspice's netlist "
+			+ "parser stops at the first `.end`, so anything appended afterwards (like our "
+			+ "FO4 output-load caps) is silently ignored.")
+	var fo4_cap_line_position_in_testbench := -1
+	var dot_end_position_in_testbench := -1
+	for one_line_index in converted_lines.size():
+		if converted_lines[one_line_index].contains("C_SPICE3D_FO4_LOAD_"):
+			fo4_cap_line_position_in_testbench = one_line_index
+		if converted_lines[one_line_index].strip_edges() == ".end":
+			dot_end_position_in_testbench = one_line_index
+	assert_true(fo4_cap_line_position_in_testbench >= 0,
+			"FO4 cap line must exist in the converted testbench.")
+	if dot_end_position_in_testbench >= 0:
+		assert_lt(dot_end_position_in_testbench, fo4_cap_line_position_in_testbench,
+				"If a `.end` directive somehow survives, the FO4 cap line must precede it so "
+				+ "ngspice actually parses the cap before halting at `.end`.")

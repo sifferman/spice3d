@@ -2,6 +2,8 @@ extends Node3D
 
 @onready var schematic_view: Node3D = $SchematicView
 @onready var status_label: Label = $StatusOverlay/StatusLabel
+@onready var status_background_color_rect: ColorRect = $StatusOverlay/StatusBackground
+@onready var time_warp_input_line_edit: LineEdit = $StatusOverlay/TimeWarpControl/TimeWarpInnerHBox/TimeWarpInput
 
 const ACTIVE_EXAMPLE_DIRECTORY_NAME := "button"
 const SCHEMATIC_BUNDLED_DIR := "res://examples/" + ACTIVE_EXAMPLE_DIRECTORY_NAME
@@ -41,6 +43,7 @@ const SKY130_PDK_RES_BUNDLED_FILES_TO_STAGE_INTO_WORKER_FILESYSTEM := [
 
 
 func _ready() -> void:
+	populate_time_warp_option_button_with_supported_units()
 	set_status_label_text_to_loading_phase("Setting up Godot scene")
 	request_persistent_browser_storage_on_web()
 	var spice3d_root_node := Spice3DNode.new()
@@ -73,23 +76,116 @@ func _ready() -> void:
 			spice3d_root_node,
 			staged_top_schematic_absolute_path,
 			extra_symbol_search_directories)
-	update_status_text(spice3d_root_node, loaded_schematic)
+	loaded_schematic_pending_ready_transition_on_first_sample = loaded_schematic
+	spice3d_root_node_pending_ready_transition_on_first_sample = spice3d_root_node
+	set_status_label_text_to_loading_phase("Waiting for first ngspice sample to come back")
 
 
 func set_status_label_text_to_loading_phase(human_readable_phase_description: String) -> void:
-	status_label.text = ("Loading: " + human_readable_phase_description + "..."
-			+ "\n(this may take a few seconds on first visit)")
+	status_label.text = ("[LOADING — simulator not yet ready] " + human_readable_phase_description + "..."
+			+ "\n(may take a few seconds on first visit; button clicks won't register until ready)")
+	status_background_color_rect.color = STATUS_BACKGROUND_COLOR_WHILE_SIMULATOR_LOADING
 	print("[spice3d] loading phase: " + human_readable_phase_description)
 
 
+func populate_time_warp_option_button_with_supported_units() -> void:
+	time_warp_input_line_edit.text = TIME_WARP_DEFAULT_INPUT_TEXT
+	time_warp_input_line_edit.text_submitted.connect(_on_time_warp_input_text_submitted_by_user)
+
+
+func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) -> void:
+	var parsed_simulated_seconds_per_real_second: float = parse_time_warp_input_text_to_simulated_seconds_per_real_second(
+			submitted_input_text)
+	if is_nan(parsed_simulated_seconds_per_real_second):
+		print("[spice3d] ignored invalid time-warp input %s — expected '<1-1000> <ps|ns|us>'" % [
+				JSON.stringify(submitted_input_text)])
+		time_warp_input_line_edit.text = format_simulated_seconds_per_real_second_as_input_text(
+				currently_selected_time_warp_simulated_seconds_per_real_second)
+		return
+	currently_selected_time_warp_simulated_seconds_per_real_second = parsed_simulated_seconds_per_real_second
+	print("[spice3d] time-warp set to %s sim seconds per real second (timestep=%s s)" % [
+			str(currently_selected_time_warp_simulated_seconds_per_real_second),
+			str(compute_transient_timestep_seconds_for_current_time_warp())])
+	if spice3d_root_node_for_sample_polling != null:
+		spice3d_root_node_for_sample_polling.start_transient_analysis_on_web_simulator(
+				compute_transient_timestep_seconds_for_current_time_warp(),
+				TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)
+
+
+func parse_time_warp_input_text_to_simulated_seconds_per_real_second(input_text: String) -> float:
+	var trimmed_lowercase_text := input_text.strip_edges().to_lower().replace("µ", "u")
+	var unit_multiplier_in_seconds := 0.0
+	if trimmed_lowercase_text.ends_with("ps"):
+		unit_multiplier_in_seconds = 1.0e-12
+	elif trimmed_lowercase_text.ends_with("ns"):
+		unit_multiplier_in_seconds = 1.0e-9
+	elif trimmed_lowercase_text.ends_with("us"):
+		unit_multiplier_in_seconds = 1.0e-6
+	else:
+		return NAN
+	var numeric_text_without_unit_suffix := trimmed_lowercase_text.substr(
+			0, trimmed_lowercase_text.length() - 2).strip_edges()
+	if not numeric_text_without_unit_suffix.is_valid_float():
+		return NAN
+	var numeric_value: float = numeric_text_without_unit_suffix.to_float()
+	if numeric_value <= 0.0 or numeric_value > TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE:
+		return NAN
+	return numeric_value * unit_multiplier_in_seconds
+
+
+func format_simulated_seconds_per_real_second_as_input_text(seconds_value: float) -> String:
+	if seconds_value >= 1.0e-6:
+		return "%s us" % str(seconds_value * 1.0e6)
+	if seconds_value >= 1.0e-9:
+		return "%s ns" % str(seconds_value * 1.0e9)
+	return "%s ps" % str(seconds_value * 1.0e12)
+
+
+func compute_transient_timestep_seconds_for_current_time_warp() -> float:
+	# Pick the smaller of "user-requested sim per wall second" and "fixed tran
+	# stop window", then divide by the nominal playback rate. This guarantees:
+	# - At fast T (T >= STOP): timestep = STOP / N — ~N samples per tran, played
+	#   back at high wall-clock rate (animation looks instant).
+	# - At slow T (T < STOP): timestep = T / N — ~N * STOP/T samples per tran,
+	#   played back at N samples per wall second (smooth slow-motion).
+	# Both cases land on a steady ~N samples per wall second of playback.
+	var smaller_of_stop_and_warp_seconds := minf(
+			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS,
+			currently_selected_time_warp_simulated_seconds_per_real_second)
+	return (smaller_of_stop_and_warp_seconds
+			/ TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK)
+
+
+func compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp() -> float:
+	return (compute_transient_timestep_seconds_for_current_time_warp()
+			/ currently_selected_time_warp_simulated_seconds_per_real_second)
+
+
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
-const TRANSIENT_TIMESTEP_SECONDS := 5.0e-12
-const TRANSIENT_STOP_TIME_PER_EVENT_DRIVEN_SIMULATION_SECONDS := 2.0e-10
+
+# `tran` parameters per event-driven click. Fixed (NOT user-controlled):
+# the window must always be wide enough for the sky130 inverter's RC
+# transient to fully complete inside it, otherwise users at slow time-warp
+# settings see no voltage change at all. 1 ns is ~20x the cell's switching
+# time and plenty of margin.
+const TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS := 2.0e-10
+const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
+
+# How much simulated time advances per second of wall clock — user-controlled
+# via the TimeWarpInput LineEdit at the bottom of the screen. The user types
+# "<positive number up to 1000> <ps|ns|us>" (e.g. "250 ns") and on submit
+# we recompute the wall-clock spacing between sample-playback steps so the
+# fixed-size ngspice tran replays at the chosen pace.
+const TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE := 1000.0
+const TIME_WARP_DEFAULT_INPUT_TEXT := "1 ns"
+const TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND := 1.0e-9
+
+const STATUS_BACKGROUND_COLOR_WHILE_SIMULATOR_LOADING := Color(0.65, 0.3, 0.0, 0.75)
+const STATUS_BACKGROUND_COLOR_AFTER_SIMULATOR_READY := Color(0.0, 0.0, 0.0, 0.55)
 const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.0
 const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 10000.0
 const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 3
 const MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC := 0.2
-const WALL_CLOCK_SECONDS_BETWEEN_SAMPLE_PLAYBACK_STEPS := 0.03
 
 const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
 const SKY130_PDK_LIB_CORNER_NAME := "tt"
@@ -110,13 +206,22 @@ var most_recently_logged_net1_voltage_volts := -100.0
 var most_recently_logged_btn_out_n_voltage_volts := -100.0
 var queued_samples_awaiting_playback_to_wires: Array = []
 var wall_clock_seconds_accumulated_since_last_playback_step := 0.0
+var currently_selected_time_warp_simulated_seconds_per_real_second: float = TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND
+var wall_clock_seconds_accumulated_since_last_logged_invalid_time_warp_input: float = 0.0
+var loaded_schematic_pending_ready_transition_on_first_sample: Dictionary = {}
+var spice3d_root_node_pending_ready_transition_on_first_sample: Node = null
+var is_simulator_ready_to_accept_button_clicks: bool = false
 
 
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
+	if not is_simulator_ready_to_accept_button_clicks:
+		print("[spice3d] button '%s' click ignored — simulator is still loading" % button_instance_name)
+		return
 	var previously_high_state: bool = pressed_button_high_state_by_instance_name.get(button_instance_name, false)
 	var new_high_state := not previously_high_state
 	pressed_button_high_state_by_instance_name[button_instance_name] = new_high_state
 	print("[spice3d] button '%s' toggled %s" % [button_instance_name, "HIGH" if new_high_state else "LOW"])
+	queued_samples_awaiting_playback_to_wires.clear()
 	if spice3d_root_node_for_sample_polling != null:
 		var new_voltage_for_button := VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL if new_high_state else 0.0
 		spice3d_root_node_for_sample_polling.set_external_voltage_source_on_web_simulator(
@@ -227,6 +332,29 @@ func is_subckt_wrapper_directive(spice_netlist_line: String) -> bool:
 	return false
 
 
+const SKY130_INV_4_PIN_INPUT_CAPACITANCE_IN_SPICE_LITERAL := "7.4f"
+
+
+func extract_output_net_name_from_xschem_pininfo_comment_or_empty(spice_netlist_line: String) -> String:
+	# xschem2spice emits one comment per pin in the form `*.PININFO <net>:<dir>`
+	# where <dir> is 'O' for outputs, 'I' for inputs, 'B' for bidirectional.
+	# We attach a load capacitor only to outputs so the inverter (or whatever
+	# drives the pin) sees a realistic FO4 capacitive load instead of a
+	# parasitic-only floating node that switches in sub-picoseconds.
+	var trimmed := spice_netlist_line.strip_edges()
+	const PININFO_DIRECTIVE_PREFIX := "*.PININFO"
+	if not trimmed.begins_with(PININFO_DIRECTIVE_PREFIX):
+		return ""
+	var after_directive_prefix := trimmed.substr(PININFO_DIRECTIVE_PREFIX.length()).strip_edges()
+	var colon_position := after_directive_prefix.find(":")
+	if colon_position < 0:
+		return ""
+	var direction_suffix := after_directive_prefix.substr(colon_position + 1).strip_edges().to_upper()
+	if not direction_suffix.begins_with("O"):
+		return ""
+	return after_directive_prefix.substr(0, colon_position).strip_edges()
+
+
 func convert_xschem_subckt_netlist_into_top_level_testbench(
 		raw_xschem_netlist_lines: PackedStringArray) -> PackedStringArray:
 	var top_level_testbench_lines := PackedStringArray()
@@ -237,11 +365,35 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 			% SKY130_FD_SC_HD_CONSOLIDATED_SPICE_VIRTUAL_PATH_IN_WORKER)
 	top_level_testbench_lines.append_array(
 			PackedStringArray(SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH))
+	var output_net_names_to_load_with_fo4_capacitor := PackedStringArray()
+	var raw_xschem_netlist_contained_a_dot_end_directive := false
 	for one_existing_line in raw_xschem_netlist_lines:
+		var output_net_name := extract_output_net_name_from_xschem_pininfo_comment_or_empty(one_existing_line)
+		if not output_net_name.is_empty():
+			output_net_names_to_load_with_fo4_capacitor.append(output_net_name)
 		if is_subckt_wrapper_directive(one_existing_line):
+			continue
+		# Hold back `.end` so we can append FO4 output-load caps *before* it.
+		# ngspice's netlist parser stops at the first `.end`, so any cap line
+		# placed after `.end` is silently ignored. But omitting `.end` entirely
+		# leaves the circuit uncommitted ("no circuit loaded" at `run` time).
+		# So we keep `.end` and just re-order: caps first, then `.end`.
+		if one_existing_line.strip_edges() == ".end":
+			raw_xschem_netlist_contained_a_dot_end_directive = true
 			continue
 		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(one_existing_line)
 		top_level_testbench_lines.append(without_escape_backslashes)
+	for one_output_net_name in output_net_names_to_load_with_fo4_capacitor:
+		top_level_testbench_lines.append("C_SPICE3D_FO4_LOAD_%s %s VGND %s" % [
+			one_output_net_name,
+			one_output_net_name,
+			SKY130_INV_4_PIN_INPUT_CAPACITANCE_IN_SPICE_LITERAL])
+	if raw_xschem_netlist_contained_a_dot_end_directive:
+		top_level_testbench_lines.append(".end")
+	print("[spice3d] testbench loads %d output net(s) with %s FO4 caps: %s" % [
+		output_net_names_to_load_with_fo4_capacitor.size(),
+		SKY130_INV_4_PIN_INPUT_CAPACITANCE_IN_SPICE_LITERAL,
+		str(output_net_names_to_load_with_fo4_capacitor)])
 	return top_level_testbench_lines
 
 
@@ -256,12 +408,20 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
+	print("[spice3d] BUILD-MARKER 2026-05-26-B: FO4 cap before .end")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size()])
+	print("[spice3d] ----- full testbench netlist sent to ngspice -----")
+	for one_testbench_line_index in netlist_lines_with_pdk_include.size():
+		print("[spice3d]   %02d | %s" % [
+			one_testbench_line_index,
+			netlist_lines_with_pdk_include[one_testbench_line_index]])
+	print("[spice3d] ----- end testbench netlist -----")
 	spice3d_root_node.set_simulation_sample_throttle_on_web_simulator(SIMULATION_SAMPLE_FORWARD_RATE_HZ)
 	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines_with_pdk_include)
 	spice3d_root_node.start_transient_analysis_on_web_simulator(
-			TRANSIENT_TIMESTEP_SECONDS, TRANSIENT_STOP_TIME_PER_EVENT_DRIVEN_SIMULATION_SECONDS)
+			compute_transient_timestep_seconds_for_current_time_warp(),
+			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)
 
 
 func _process(delta_seconds_since_last_frame: float) -> void:
@@ -282,7 +442,7 @@ func drain_new_simulator_samples_into_playback_queue() -> void:
 func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 		delta_seconds_since_last_frame: float) -> void:
 	wall_clock_seconds_accumulated_since_last_playback_step += delta_seconds_since_last_frame
-	if wall_clock_seconds_accumulated_since_last_playback_step < WALL_CLOCK_SECONDS_BETWEEN_SAMPLE_PLAYBACK_STEPS:
+	if wall_clock_seconds_accumulated_since_last_playback_step < compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp():
 		return
 	wall_clock_seconds_accumulated_since_last_playback_step = 0.0
 	if queued_samples_awaiting_playback_to_wires.is_empty():
@@ -331,6 +491,13 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 		print("[spice3d] schematic_view has %d children; spice_node_name-tagged wire counts: %s" % [
 				schematic_view_child_count,
 				str(wires_tagged_with_spice_node_name_by_label)])
+		if spice3d_root_node_pending_ready_transition_on_first_sample != null:
+			update_status_text(
+					spice3d_root_node_pending_ready_transition_on_first_sample,
+					loaded_schematic_pending_ready_transition_on_first_sample)
+			spice3d_root_node_pending_ready_transition_on_first_sample = null
+			loaded_schematic_pending_ready_transition_on_first_sample = {}
+			is_simulator_ready_to_accept_button_clicks = true
 
 
 func resolve_latest_sky130_ciel_version_from_manifest_with_fallback() -> String:
@@ -664,7 +831,7 @@ func absolute_path_for_sky130_xschem_library_directory_for_sky130b_variant(sky13
 
 
 func update_status_text(spice3d_root_node: Node, loaded_schematic: Dictionary) -> void:
-	var status_text := "spice3d %s\nbackend: %s\n%s — %d components, %d wires" % [
+	var status_text := "[READY] spice3d %s | backend: %s | %s — %d components, %d wires" % [
 		spice3d_root_node.get_spice3d_version(),
 		spice3d_root_node.describe_simulator_backend(),
 		loaded_schematic["cell_name"],
@@ -674,6 +841,7 @@ func update_status_text(spice3d_root_node: Node, loaded_schematic: Dictionary) -
 	if not loaded_schematic["was_successful"]:
 		status_text += "\nload error: " + str(loaded_schematic["error_message"])
 	status_label.text = status_text
+	status_background_color_rect.color = STATUS_BACKGROUND_COLOR_AFTER_SIMULATOR_READY
 	print(status_text)
 
 

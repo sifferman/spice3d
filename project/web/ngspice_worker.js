@@ -207,9 +207,14 @@ function registerGetVsrcDataCallbackWithNgspiceForExternalVoltageSources() {
 
 function runEventDrivenShortTransientFromInitialConditionsBlocking() {
 	postRunningStateChangedMessage(true);
+	// Pass tstep as the 4th argument (tmax) too so ngspice's adaptive solver
+	// can't take strides larger than tstep once the inverter settles. Without
+	// this the solver leaps from ~200 ps straight to tstop with no samples
+	// in between, leaving the playback animation visibly choppy.
 	ngspiceSendCommand('tran '
 			+ configuredTransientTimestepInSeconds + ' '
-			+ configuredTransientStopTimeInSecondsPerEventDrivenRun);
+			+ configuredTransientStopTimeInSecondsPerEventDrivenRun + ' 0 '
+			+ configuredTransientTimestepInSeconds);
 	ngspiceSendCommand('run');
 	for (const oneSourceName in externalVoltageSourceStateByLowercaseName) {
 		const sourceState = externalVoltageSourceStateByLowercaseName[oneSourceName];

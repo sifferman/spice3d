@@ -44,3 +44,22 @@ offset_bottom = 88.0
 horizontal_alignment = 1
 vertical_alignment = 1
 text = "spice3d loading…"
+
+[node name="TimeWarpControl" type="CenterContainer" parent="StatusOverlay"]
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -60.0
+offset_bottom = -20.0
+
+[node name="TimeWarpInnerHBox" type="HBoxContainer" parent="StatusOverlay/TimeWarpControl"]
+
+[node name="TimeWarpLabel" type="Label" parent="StatusOverlay/TimeWarpControl/TimeWarpInnerHBox"]
+text = "Sim time per real second:"
+
+[node name="TimeWarpInput" type="LineEdit" parent="StatusOverlay/TimeWarpControl/TimeWarpInnerHBox"]
+text = "1 ns"
+placeholder_text = "e.g. 250 ns"
+custom_minimum_size = Vector2(120, 0)
+alignment = 1
