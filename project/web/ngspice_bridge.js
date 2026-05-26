@@ -84,15 +84,6 @@
 			return true;
 		},
 
-		setSampleThrottleMaxSamplesPerSecond: function setSampleThrottleMaxSamplesPerSecond(maxSamplesPerSecond) {
-			if (!this.ngspiceWorker) return false;
-			this.ngspiceWorker.postMessage({
-				messageKind: 'setSampleThrottle',
-				maxSamplesPerSecond: Number(maxSamplesPerSecond),
-			});
-			return true;
-		},
-
 		takeBufferedSimulationSamples: function takeBufferedSimulationSamples() {
 			const drainedSamples = this.bufferedSimulationSamples;
 			this.bufferedSimulationSamples = [];

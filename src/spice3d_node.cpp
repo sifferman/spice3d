@@ -884,9 +884,6 @@ void Spice3DNode::_bind_methods() {
 					"file_content_text"),
 			&Spice3DNode::install_file_text_in_web_simulator_filesystem);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("set_simulation_sample_throttle_on_web_simulator", "max_samples_per_second"),
-			&Spice3DNode::set_simulation_sample_throttle_on_web_simulator);
-	godot::ClassDB::bind_method(
 			godot::D_METHOD("apply_node_voltages_to_wire_colors",
 					"schematic_root_node",
 					"spice_node_name_to_voltage",
@@ -1130,19 +1127,6 @@ bool Spice3DNode::install_file_text_in_web_simulator_filesystem(
 #else
 	(void)virtual_path_inside_worker_filesystem;
 	(void)file_content_text;
-	return false;
-#endif
-}
-
-bool Spice3DNode::set_simulation_sample_throttle_on_web_simulator(double max_samples_per_second) {
-#ifdef WEB_ENABLED
-	const godot::String javascript_to_evaluate =
-			godot::String("globalThis.spice3d && globalThis.spice3d.setSampleThrottleMaxSamplesPerSecond(")
-			+ godot::String::num(max_samples_per_second) + godot::String(");");
-	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
-	return true;
-#else
-	(void)max_samples_per_second;
 	return false;
 #endif
 }

@@ -1,5 +1,7 @@
 extends Node3D
 
+const SiPrefixTime = preload("res://si_prefix_time_formatter.gd")
+
 @onready var schematic_view: Node3D = $SchematicView
 @onready var status_label: Label = $StatusOverlay/StatusLabel
 @onready var status_background_color_rect: ColorRect = $StatusOverlay/StatusBackground
@@ -103,9 +105,9 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 				currently_selected_time_warp_simulated_seconds_per_real_second)
 		return
 	currently_selected_time_warp_simulated_seconds_per_real_second = parsed_simulated_seconds_per_real_second
-	print("[spice3d] time-warp set to %s sim seconds per real second (timestep=%s s)" % [
-			String.num_scientific(currently_selected_time_warp_simulated_seconds_per_real_second),
-			String.num_scientific(compute_transient_timestep_seconds_for_current_time_warp())])
+	print("[spice3d] time-warp set to %s sim-time per real-second (timestep=%s)" % [
+			SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
+			SiPrefixTime.format_seconds_with_si_prefix(compute_transient_timestep_seconds_for_current_time_warp())])
 	if spice3d_root_node_for_sample_polling != null:
 		spice3d_root_node_for_sample_polling.start_transient_analysis_on_web_simulator(
 				compute_transient_timestep_seconds_for_current_time_warp(),
@@ -163,12 +165,13 @@ func compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_w
 
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
 
-# `tran` parameters per event-driven click. Fixed (NOT user-controlled):
-# the window must always be wide enough for the sky130 inverter's RC
-# transient to fully complete inside it, otherwise users at slow time-warp
-# settings see no voltage change at all. 1 ns is ~20x the cell's switching
-# time and plenty of margin.
-const TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS := 2.0e-10
+# `tran` window per click. Must exceed the longest propagation delay in
+# the loaded circuit so the final samples reach the post-transition steady
+# state. 2 ns covers ~60 stacked sky130 inv_1 stages (each ~30 ps tpd); for
+# deeper logic chains, increase this. Future work: replace the constant
+# with an auto-extending tran (re-run with `cont` until d/dt of all wire
+# voltages drops below a threshold) instead of guessing a window up front.
+const TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS := 2.0e-9
 const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
 
 # How much simulated time advances per second of wall clock — user-controlled
@@ -186,16 +189,6 @@ const TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND := 100.0e-12
 const STATUS_BACKGROUND_COLOR_WHILE_SIMULATOR_LOADING := Color(0.65, 0.3, 0.0, 0.75)
 const STATUS_BACKGROUND_COLOR_AFTER_SIMULATOR_READY := Color(0.0, 0.0, 0.0, 0.55)
 const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.0
-# Effectively unthrottled. The throttle (worker-side) was useful when a single
-# long bg_run was producing samples continuously and we wanted to bound the
-# postMessage rate to ~30 Hz for the wires. Under the current event-driven
-# model each `tran` produces a bounded burst of samples synchronously inside
-# `run`, and we WANT all of them so the playback queue can pace them out at
-# the user's chosen time warp. At T=1 ps and tmax=33 fs ngspice emits ~6000
-# samples per click in a wall-time burst of ~60 ms; the old 10 kHz throttle
-# was dropping ~99% of them, compressing the wall-time animation to ~3 s
-# instead of the math's ~200 s.
-const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 1.0e9
 const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 3
 const MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC := 0.2
 
@@ -257,10 +250,10 @@ func reset_per_click_animation_diagnostic_counters_for_a_new_click(human_event_d
 	per_click_diagnostic_animation_total_samples_played_back_since_last_click = 0
 	per_click_diagnostic_animation_wall_clock_seconds_at_last_click = Time.get_ticks_msec() / 1000.0
 	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = true
-	print("[spice3d] click-anim-begin: %s (T=%s sim-s/real-s, timestep=%s s)" % [
+	print("[spice3d] click-anim-begin: %s (T=%s sim-time per real-second, timestep=%s)" % [
 		human_event_description,
-		String.num_scientific(currently_selected_time_warp_simulated_seconds_per_real_second),
-		String.num_scientific(compute_transient_timestep_seconds_for_current_time_warp())])
+		SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
+		SiPrefixTime.format_seconds_with_si_prefix(compute_transient_timestep_seconds_for_current_time_warp())])
 
 
 func log_per_click_animation_summary_if_pending() -> void:
@@ -274,12 +267,12 @@ func log_per_click_animation_summary_if_pending() -> void:
 	var expected_wall_clock_duration_seconds: float = (
 			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS
 			/ currently_selected_time_warp_simulated_seconds_per_real_second)
-	print("[spice3d] click-anim-end: %d sample(s) played back over %.2fs wall (expected ~%.2fs at T=%s sim-s/real-s with %s stop)" % [
+	print("[spice3d] click-anim-end: %d sample(s) played back over %s wall (expected ~%s at T=%s sim-time per real-second with %s tran-window)" % [
 		per_click_diagnostic_animation_total_samples_played_back_since_last_click,
-		animation_wall_clock_duration_seconds,
-		expected_wall_clock_duration_seconds,
-		String.num_scientific(currently_selected_time_warp_simulated_seconds_per_real_second),
-		String.num_scientific(TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)])
+		SiPrefixTime.format_seconds_with_si_prefix(animation_wall_clock_duration_seconds),
+		SiPrefixTime.format_seconds_with_si_prefix(expected_wall_clock_duration_seconds),
+		SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
+		SiPrefixTime.format_seconds_with_si_prefix(TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)])
 	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = false
 
 
@@ -463,7 +456,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-E: scientific-notation log timestamps + pacing tests")
+	print("[spice3d] BUILD-MARKER 2026-05-26-F: SI-prefix log notation + throttle removed (timer-paced)")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size()])
 	print("[spice3d] ----- full testbench netlist sent to ngspice -----")
@@ -472,7 +465,6 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 			one_testbench_line_index,
 			netlist_lines_with_pdk_include[one_testbench_line_index]])
 	print("[spice3d] ----- end testbench netlist -----")
-	spice3d_root_node.set_simulation_sample_throttle_on_web_simulator(SIMULATION_SAMPLE_FORWARD_RATE_HZ)
 	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines_with_pdk_include)
 	reset_per_click_animation_diagnostic_counters_for_a_new_click("initial transient on page load")
 	spice3d_root_node.start_transient_analysis_on_web_simulator(
@@ -526,8 +518,8 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 		if remaining_initial_samples_to_log_key_voltages_for > 0:
 			remaining_initial_samples_to_log_key_voltages_for -= 1
 		var sim_time_seconds: float = next_sample_to_play_back.get("simulationTimeSeconds", 0.0)
-		print("[spice3d] played-back sample t=%ss net1=%f btn_out_n=%f remaining_in_queue=%d" % [
-				String.num_scientific(sim_time_seconds),
+		print("[spice3d] played-back sample t=%s net1=%f btn_out_n=%f remaining_in_queue=%d" % [
+				SiPrefixTime.format_seconds_with_si_prefix(sim_time_seconds),
 				current_net1_voltage_volts,
 				current_btn_out_n_voltage_volts,
 				queued_samples_awaiting_playback_to_wires.size()])

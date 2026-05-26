@@ -51,7 +51,6 @@ public:
 	bool install_file_text_in_web_simulator_filesystem(
 			const godot::String &virtual_path_inside_worker_filesystem,
 			const godot::String &file_content_text);
-	bool set_simulation_sample_throttle_on_web_simulator(double max_samples_per_second);
 	void apply_node_voltages_to_wire_colors(
 			godot::Node3D *schematic_root_node,
 			const godot::Dictionary &spice_node_name_to_voltage,

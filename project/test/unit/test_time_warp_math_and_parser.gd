@@ -98,12 +98,17 @@ func test_parser_rejects_empty_string() -> void:
 
 # ---------- compute_transient_timestep_seconds_for_current_time_warp tests ----------
 
-# The formula is: timestep = min(TRAN_STOP, T) / N
-# where TRAN_STOP = 2e-10 s (200 ps, fixed) and N = 30 (nominal samples per
-# wall second of playback).
+# The formula is: timestep = min(TRAN_STOP, T) / N.
+# The expected values below are derived from the constants on main.gd
+# rather than hardcoded so this file does not need editing when the
+# tran-window default changes.
 
-const FIXED_TRAN_STOP_FOR_TIMESTEP_FORMULA_REFERENCE := 2.0e-10
-const NOMINAL_PLAYBACK_SAMPLES_PER_WALL_SECOND_REFERENCE := 30
+func tran_stop_constant_from_main_gd() -> float:
+	return loaded_main_script_instance.TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS
+
+
+func nominal_playback_samples_per_wall_second_constant_from_main_gd() -> int:
+	return loaded_main_script_instance.TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK
 
 
 func test_timestep_at_t_below_tran_stop_scales_with_t() -> void:
@@ -112,16 +117,16 @@ func test_timestep_at_t_below_tran_stop_scales_with_t() -> void:
 	# smoother slow-motion animation.
 	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = 50.0e-12
 	var computed_timestep: float = loaded_main_script_instance.compute_transient_timestep_seconds_for_current_time_warp()
-	var expected_timestep := 50.0e-12 / NOMINAL_PLAYBACK_SAMPLES_PER_WALL_SECOND_REFERENCE
+	var expected_timestep := 50.0e-12 / nominal_playback_samples_per_wall_second_constant_from_main_gd()
 	assert_almost_eq(computed_timestep, expected_timestep, 1.0e-15,
 			"At T < TRAN_STOP the timestep should be T / N to keep sample count high "
 			+ "(slow-motion needs more frames).")
 
 
 func test_timestep_at_t_equal_to_tran_stop_uses_stop_over_n() -> void:
-	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = FIXED_TRAN_STOP_FOR_TIMESTEP_FORMULA_REFERENCE
+	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = tran_stop_constant_from_main_gd()
 	var computed_timestep: float = loaded_main_script_instance.compute_transient_timestep_seconds_for_current_time_warp()
-	var expected_timestep := FIXED_TRAN_STOP_FOR_TIMESTEP_FORMULA_REFERENCE / NOMINAL_PLAYBACK_SAMPLES_PER_WALL_SECOND_REFERENCE
+	var expected_timestep := tran_stop_constant_from_main_gd() / nominal_playback_samples_per_wall_second_constant_from_main_gd()
 	assert_almost_eq(computed_timestep, expected_timestep, 1.0e-15,
 			"At T == TRAN_STOP the timestep should equal TRAN_STOP / N.")
 
@@ -132,7 +137,7 @@ func test_timestep_at_t_far_above_tran_stop_is_clamped_to_stop_over_n() -> void:
 	# the user asked for fast playback.
 	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = 1.0e-6
 	var computed_timestep: float = loaded_main_script_instance.compute_transient_timestep_seconds_for_current_time_warp()
-	var expected_timestep := FIXED_TRAN_STOP_FOR_TIMESTEP_FORMULA_REFERENCE / NOMINAL_PLAYBACK_SAMPLES_PER_WALL_SECOND_REFERENCE
+	var expected_timestep := tran_stop_constant_from_main_gd() / nominal_playback_samples_per_wall_second_constant_from_main_gd()
 	assert_almost_eq(computed_timestep, expected_timestep, 1.0e-15,
 			"At T >> TRAN_STOP the timestep should saturate at TRAN_STOP / N.")
 
@@ -154,7 +159,7 @@ func test_wall_per_sample_at_slow_time_warp_is_thirtieth_of_a_second() -> void:
 
 
 func test_wall_per_sample_at_t_equal_to_tran_stop_is_thirtieth_of_a_second() -> void:
-	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = FIXED_TRAN_STOP_FOR_TIMESTEP_FORMULA_REFERENCE
+	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = tran_stop_constant_from_main_gd()
 	var computed_wall_per_sample: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
 	assert_almost_eq(computed_wall_per_sample, 1.0 / 30.0, 1.0e-6,
 			"At T == TRAN_STOP the playback rate is also ~30 samples/wall-second.")
@@ -167,7 +172,7 @@ func test_wall_per_sample_at_fast_time_warp_collapses_toward_one_frame() -> void
 	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = 1.0e-6
 	var computed_wall_per_sample: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
 	# timestep at this T = TRAN_STOP/30 = 200ps/30. wall_per_sample = (200ps/30) / 1us = 200ps/(30*1us) = 6.67us
-	var expected_wall_per_sample := FIXED_TRAN_STOP_FOR_TIMESTEP_FORMULA_REFERENCE / (NOMINAL_PLAYBACK_SAMPLES_PER_WALL_SECOND_REFERENCE * 1.0e-6)
+	var expected_wall_per_sample := tran_stop_constant_from_main_gd() / (nominal_playback_samples_per_wall_second_constant_from_main_gd() * 1.0e-6)
 	assert_almost_eq(computed_wall_per_sample, expected_wall_per_sample, 1.0e-9,
 			"At T well above TRAN_STOP the wall-per-sample collapses below one render frame "
 			+ "— the animation correctly reads as instant.")
