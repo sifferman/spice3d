@@ -15,18 +15,24 @@ func after_each() -> void:
 		loaded_main_script_instance = null
 
 
-func test_strip_xschem_external_voltage_source_keyword_removes_trailing_external() -> void:
-	var stripped: String = loaded_main_script_instance.strip_xschem_external_voltage_source_keyword(
-			"VBUTTON1 net1 VGND external")
-	assert_eq(stripped, "VBUTTON1 net1 VGND",
-			"Trailing ' external' should be stripped from xschem voltage source emission.")
-
-
-func test_strip_xschem_external_voltage_source_keyword_leaves_other_lines_alone() -> void:
-	var unchanged: String = loaded_main_script_instance.strip_xschem_external_voltage_source_keyword(
-			"V1 in 0 DC 1.8")
-	assert_eq(unchanged, "V1 in 0 DC 1.8",
-			"Lines without trailing 'external' should pass through unchanged.")
+func test_external_voltage_source_keyword_passes_through_to_ngspice_unchanged() -> void:
+	# xschem emits "Vname n1 n2 external" for externally-controlled sources.
+	# ngspice's shared-library mode (--with-ngshared, SHARED_MODULE) implements
+	# `external` natively: at every solver step the GetVSRCData callback
+	# registered via ngSpice_Init_Sync gets queried for the current value.
+	# So the testbench must keep `external` verbatim — no substitution.
+	var raw_xschem_emission := PackedStringArray([
+		"** sch_path: /tmp/button_test.sch",
+		".subckt button_test btn_out_n",
+		"VBUTTON1 net1 VGND external",
+		".ends",
+	])
+	var converted_lines: PackedStringArray = loaded_main_script_instance.convert_xschem_subckt_netlist_into_top_level_testbench(
+			raw_xschem_emission)
+	var single_blob_for_inspection := "\n".join(converted_lines)
+	assert_true(single_blob_for_inspection.contains("VBUTTON1 net1 VGND external"),
+			"`external` is a real ngspice source type under --with-ngshared; "
+			+ "the xschem line must survive into the testbench verbatim.")
 
 
 func test_strip_xschem_escape_backslashes_removes_backslash_before_underscored_number() -> void:
@@ -53,7 +59,7 @@ func test_is_subckt_wrapper_directive_identifies_wrapper_lines() -> void:
 	assert_false(loaded_main_script_instance.is_subckt_wrapper_directive("*.PININFO btn_out_n:O"))
 
 
-func test_subckt_to_testbench_conversion_strips_all_three_xschem_artifacts() -> void:
+func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrapper_and_unescapes_subckt_names() -> void:
 	var raw_xschem_emission := PackedStringArray([
 		"** sch_path: /tmp/button_test.sch",
 		".subckt button_test btn_out_n",
@@ -75,8 +81,9 @@ func test_subckt_to_testbench_conversion_strips_all_three_xschem_artifacts() -> 
 	assert_eq(ends_directive_occurrence_count, 0,
 			"No `.ends` should survive — the xschem button_test wrapper's `.ends` must be stripped, "
 			+ "and stdcell subckts come from the '.include'd PDK file at simulation time.")
-	assert_false(single_blob_for_inspection.contains(" external"),
-			"xschem's 'external' keyword must be stripped (ngspice rejects it).")
+	assert_true(single_blob_for_inspection.contains(" external"),
+			"xschem's 'external' keyword must pass through to ngspice — "
+			+ "ngspice's shared-library mode handles it via the GetVSRCData callback.")
 	assert_false(single_blob_for_inspection.contains("\\"),
 			"xschem's '\\inv_1' escape must be stripped (subckt name otherwise won't match).")
 	assert_true(single_blob_for_inspection.contains(".lib"),

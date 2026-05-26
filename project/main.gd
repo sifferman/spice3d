@@ -41,15 +41,20 @@ const SKY130_PDK_RES_BUNDLED_FILES_TO_STAGE_INTO_WORKER_FILESYSTEM := [
 
 
 func _ready() -> void:
+	set_status_label_text_to_loading_phase("Setting up Godot scene")
 	request_persistent_browser_storage_on_web()
 	var spice3d_root_node := Spice3DNode.new()
 	spice3d_root_node.button_pressed.connect(_on_schematic_button_pressed)
 	add_child(spice3d_root_node)
 	stage_bundled_schematic_files_to_writable_directory()
+	set_status_label_text_to_loading_phase("Fetching xschem device symbols")
 	await ensure_xschem_devices_library_is_cached()
+	set_status_label_text_to_loading_phase("Resolving sky130 PDK release version")
 	var sky130_ciel_version := await resolve_latest_sky130_ciel_version_from_manifest_with_fallback()
 	print("[spice3d] sky130 ciel version selected: %s" % sky130_ciel_version)
+	set_status_label_text_to_loading_phase("Downloading sky130 PDK (~20 MB)")
 	await ensure_sky130_pdk_is_cached_using_extractor_node(spice3d_root_node, sky130_ciel_version)
+	set_status_label_text_to_loading_phase("Loading schematic")
 	var staged_top_schematic_absolute_path := absolute_path_for_staged_schematic_file(TOP_SCHEMATIC_FILE_NAME)
 	var extra_symbol_search_directories := PackedStringArray([
 		absolute_path_for_xschem_devices_library_directory(),
@@ -61,21 +66,30 @@ func _ready() -> void:
 			staged_top_schematic_absolute_path,
 			"",
 			extra_symbol_search_directories)
-	update_status_text(spice3d_root_node, loaded_schematic)
+	set_status_label_text_to_loading_phase("Staging PDK into ngspice")
 	stage_sky130_pdk_files_into_web_simulator_filesystem(spice3d_root_node, sky130_ciel_version)
+	set_status_label_text_to_loading_phase("Generating netlist + starting ngspice")
 	push_spice_netlist_and_start_transient_on_web_simulator(
 			spice3d_root_node,
 			staged_top_schematic_absolute_path,
 			extra_symbol_search_directories)
+	update_status_text(spice3d_root_node, loaded_schematic)
+
+
+func set_status_label_text_to_loading_phase(human_readable_phase_description: String) -> void:
+	status_label.text = ("Loading: " + human_readable_phase_description + "..."
+			+ "\n(this may take a few seconds on first visit)")
+	print("[spice3d] loading phase: " + human_readable_phase_description)
 
 
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
-const TRANSIENT_TIMESTEP_SECONDS := 1.0e-4
-const TRANSIENT_STOP_TIME_SECONDS_EFFECTIVELY_FOREVER := 1.0e6
-const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.1
-const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 30.0
+const TRANSIENT_TIMESTEP_SECONDS := 5.0e-12
+const TRANSIENT_STOP_TIME_PER_EVENT_DRIVEN_SIMULATION_SECONDS := 2.0e-10
+const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.0
+const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 10000.0
 const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 3
-const MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC := 0.5
+const MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC := 0.2
+const WALL_CLOCK_SECONDS_BETWEEN_SAMPLE_PLAYBACK_STEPS := 0.03
 
 const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
 const SKY130_PDK_LIB_CORNER_NAME := "tt"
@@ -94,6 +108,8 @@ var remaining_initial_samples_to_log_key_voltages_for := NUMBER_OF_INITIAL_SAMPL
 var wire_color_apply_invocation_count := 0
 var most_recently_logged_net1_voltage_volts := -100.0
 var most_recently_logged_btn_out_n_voltage_volts := -100.0
+var queued_samples_awaiting_playback_to_wires: Array = []
+var wall_clock_seconds_accumulated_since_last_playback_step := 0.0
 
 
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
@@ -186,12 +202,6 @@ const SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH := [
 ]
 
 
-func strip_xschem_external_voltage_source_keyword(spice_netlist_line: String) -> String:
-	var trimmed_trailing_external_keyword := spice_netlist_line.strip_edges(false, true)
-	if trimmed_trailing_external_keyword.ends_with(" external"):
-		return trimmed_trailing_external_keyword.substr(
-				0, trimmed_trailing_external_keyword.length() - " external".length())
-	return spice_netlist_line
 
 
 func strip_xschem_escape_backslashes_from_subckt_names(spice_netlist_line: String) -> String:
@@ -230,8 +240,7 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 	for one_existing_line in raw_xschem_netlist_lines:
 		if is_subckt_wrapper_directive(one_existing_line):
 			continue
-		var without_external_keyword := strip_xschem_external_voltage_source_keyword(one_existing_line)
-		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(without_external_keyword)
+		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(one_existing_line)
 		top_level_testbench_lines.append(without_escape_backslashes)
 	return top_level_testbench_lines
 
@@ -252,23 +261,36 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	spice3d_root_node.set_simulation_sample_throttle_on_web_simulator(SIMULATION_SAMPLE_FORWARD_RATE_HZ)
 	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines_with_pdk_include)
 	spice3d_root_node.start_transient_analysis_on_web_simulator(
-			TRANSIENT_TIMESTEP_SECONDS, TRANSIENT_STOP_TIME_SECONDS_EFFECTIVELY_FOREVER)
+			TRANSIENT_TIMESTEP_SECONDS, TRANSIENT_STOP_TIME_PER_EVENT_DRIVEN_SIMULATION_SECONDS)
 
 
 func _process(delta_seconds_since_last_frame: float) -> void:
 	if spice3d_root_node_for_sample_polling == null:
 		return
-	simulation_sample_poll_accumulator_seconds += delta_seconds_since_last_frame
-	if simulation_sample_poll_accumulator_seconds < SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS:
-		return
-	simulation_sample_poll_accumulator_seconds = 0.0
+	drain_new_simulator_samples_into_playback_queue()
+	step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
+			delta_seconds_since_last_frame)
+
+
+func drain_new_simulator_samples_into_playback_queue() -> void:
 	var drained_samples: Array = spice3d_root_node_for_sample_polling.drain_buffered_simulation_samples_from_web_simulator()
 	if drained_samples.is_empty():
 		return
-	var most_recent_sample = drained_samples[drained_samples.size() - 1]
-	if not (most_recent_sample is Dictionary) or not most_recent_sample.has("nodeVoltagesByName"):
+	queued_samples_awaiting_playback_to_wires.append_array(drained_samples)
+
+
+func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
+		delta_seconds_since_last_frame: float) -> void:
+	wall_clock_seconds_accumulated_since_last_playback_step += delta_seconds_since_last_frame
+	if wall_clock_seconds_accumulated_since_last_playback_step < WALL_CLOCK_SECONDS_BETWEEN_SAMPLE_PLAYBACK_STEPS:
 		return
-	var node_voltages_by_name: Dictionary = most_recent_sample["nodeVoltagesByName"]
+	wall_clock_seconds_accumulated_since_last_playback_step = 0.0
+	if queued_samples_awaiting_playback_to_wires.is_empty():
+		return
+	var next_sample_to_play_back = queued_samples_awaiting_playback_to_wires.pop_front()
+	if not (next_sample_to_play_back is Dictionary) or not next_sample_to_play_back.has("nodeVoltagesByName"):
+		return
+	var node_voltages_by_name: Dictionary = next_sample_to_play_back["nodeVoltagesByName"]
 	if not has_logged_first_simulation_sample_node_names:
 		print("[spice3d] first sample node names: %s" % str(node_voltages_by_name.keys()))
 		has_logged_first_simulation_sample_node_names = true
@@ -285,12 +307,12 @@ func _process(delta_seconds_since_last_frame: float) -> void:
 			or btn_out_n_voltage_changed_enough_to_log):
 		if remaining_initial_samples_to_log_key_voltages_for > 0:
 			remaining_initial_samples_to_log_key_voltages_for -= 1
-		var sim_time_seconds: float = most_recent_sample.get("simulationTimeSeconds", 0.0)
-		print("[spice3d] sample t=%fs net1=%f btn_out_n=%f drained=%d" % [
+		var sim_time_seconds: float = next_sample_to_play_back.get("simulationTimeSeconds", 0.0)
+		print("[spice3d] played-back sample t=%es net1=%f btn_out_n=%f remaining_in_queue=%d" % [
 				sim_time_seconds,
 				current_net1_voltage_volts,
 				current_btn_out_n_voltage_volts,
-				drained_samples.size()])
+				queued_samples_awaiting_playback_to_wires.size()])
 		most_recently_logged_net1_voltage_volts = current_net1_voltage_volts
 		most_recently_logged_btn_out_n_voltage_volts = current_btn_out_n_voltage_volts
 	spice3d_root_node_for_sample_polling.apply_node_voltages_to_wire_colors(

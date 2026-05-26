@@ -78,3 +78,6 @@ third_party/xschem2spice/libxschem2spice.a
 third_party/xschem2spice/xschem2spice
 third_party/xschem2spice/*.wasm
 test/test_zstd_tar_archive_extractor
+
+# scons build output (gets copied into project/bin/<platform>/ after build)
+/bin/

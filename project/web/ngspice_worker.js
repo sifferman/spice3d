@@ -159,44 +159,69 @@ function handleLoadNetlistMessage(incomingMessage) {
 	ngspiceSendCommand('save none');
 }
 
-const SIMULATION_CHUNK_DURATION_IN_SIMULATED_SECONDS = 0.1;
+const EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS = 5e-12;
 
-let chunkedSimulationIsRunning = false;
-let chunkedSimulationTimestepInSeconds = 0;
-let chunkedSimulationFinalStopTimeInSeconds = 0;
-let chunkedSimulationAccumulatedStopTimeInSeconds = 0;
+let configuredTransientTimestepInSeconds = 0;
+let configuredTransientStopTimeInSecondsPerEventDrivenRun = 0;
+
+// State for each ngspice "external" voltage source. ngspice's
+// GetVSRCData callback (registered via ngSpice_Init_Sync) asks for
+// the source value at a given simulated time on every solver step.
+// At t = 0 we return valueBeforeStep so ngspice's IC solver settles
+// to the previous steady state; for t > 0 we linearly ramp toward
+// valueAfterStep over EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS,
+// then hold there. After each tran completes, valueBeforeStep
+// catches up to valueAfterStep so the next click's IC starts from
+// this click's end state.
+const externalVoltageSourceStateByLowercaseName = Object.create(null);
+
+function registerGetVsrcDataCallbackWithNgspiceForExternalVoltageSources() {
+	const getVsrcDataCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
+			function returnExternalVoltageSourceValueAtSimulatedTime(
+					resultDoublePointer, simulatedTime, sourceNameCharPointer,
+					libraryInstanceId, userDataPointer) {
+				const sourceName = ngspiceWebAssemblyModule.UTF8ToString(sourceNameCharPointer);
+				const sourceState = externalVoltageSourceStateByLowercaseName[sourceName.toLowerCase()];
+				let valueToReturn = 0;
+				if (sourceState !== undefined) {
+					if (simulatedTime <= 0) {
+						valueToReturn = sourceState.valueBeforeStep;
+					} else if (simulatedTime >= EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS) {
+						valueToReturn = sourceState.valueAfterStep;
+					} else {
+						const lerpFraction = simulatedTime / EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS;
+						valueToReturn = sourceState.valueBeforeStep
+								+ (sourceState.valueAfterStep - sourceState.valueBeforeStep) * lerpFraction;
+					}
+				}
+				ngspiceWebAssemblyModule.HEAPF64[resultDoublePointer >> 3] = valueToReturn;
+				return 0;
+			},
+			'iidiii');
+	const ngSpiceInitSyncReturnCode = ngspiceWebAssemblyModule._ngSpice_Init_Sync(
+			getVsrcDataCallbackFunctionPointer, 0, 0, 0, 0);
+	if (ngSpiceInitSyncReturnCode !== 0) {
+		throw new Error('ngSpice_Init_Sync returned ' + ngSpiceInitSyncReturnCode);
+	}
+}
+
+function runEventDrivenShortTransientFromInitialConditionsBlocking() {
+	postRunningStateChangedMessage(true);
+	ngspiceSendCommand('tran '
+			+ configuredTransientTimestepInSeconds + ' '
+			+ configuredTransientStopTimeInSecondsPerEventDrivenRun);
+	ngspiceSendCommand('run');
+	for (const oneSourceName in externalVoltageSourceStateByLowercaseName) {
+		const sourceState = externalVoltageSourceStateByLowercaseName[oneSourceName];
+		sourceState.valueBeforeStep = sourceState.valueAfterStep;
+	}
+	postRunningStateChangedMessage(false);
+}
 
 function handleStartTransientMessage(incomingMessage) {
-	chunkedSimulationTimestepInSeconds = Number(incomingMessage.timestepSeconds);
-	chunkedSimulationFinalStopTimeInSeconds = Number(incomingMessage.stopTimeSeconds);
-	chunkedSimulationAccumulatedStopTimeInSeconds = Math.min(
-			SIMULATION_CHUNK_DURATION_IN_SIMULATED_SECONDS,
-			chunkedSimulationFinalStopTimeInSeconds);
-	ngspiceSendCommand('tran '
-			+ chunkedSimulationTimestepInSeconds + ' '
-			+ chunkedSimulationAccumulatedStopTimeInSeconds);
-	ngspiceSendCommand('run');
-	chunkedSimulationIsRunning = true;
-	postRunningStateChangedMessage(true);
-	scheduleNextChunkedSimulationContinuation();
-}
-
-function scheduleNextChunkedSimulationContinuation() {
-	setTimeout(stepChunkedSimulationOneChunkForward, 0);
-}
-
-function stepChunkedSimulationOneChunkForward() {
-	if (!chunkedSimulationIsRunning) return;
-	if (chunkedSimulationAccumulatedStopTimeInSeconds >= chunkedSimulationFinalStopTimeInSeconds) {
-		chunkedSimulationIsRunning = false;
-		postRunningStateChangedMessage(false);
-		return;
-	}
-	chunkedSimulationAccumulatedStopTimeInSeconds = Math.min(
-			chunkedSimulationAccumulatedStopTimeInSeconds + SIMULATION_CHUNK_DURATION_IN_SIMULATED_SECONDS,
-			chunkedSimulationFinalStopTimeInSeconds);
-	ngspiceSendCommand('cont ' + chunkedSimulationAccumulatedStopTimeInSeconds);
-	scheduleNextChunkedSimulationContinuation();
+	configuredTransientTimestepInSeconds = Number(incomingMessage.timestepSeconds);
+	configuredTransientStopTimeInSecondsPerEventDrivenRun = Number(incomingMessage.stopTimeSeconds);
+	runEventDrivenShortTransientFromInitialConditionsBlocking();
 }
 
 function handleInstallFileTextMessage(incomingMessage) {
@@ -227,15 +252,19 @@ function handleSetSampleThrottleMessage(incomingMessage) {
 }
 
 function handleHaltMessage() {
-	chunkedSimulationIsRunning = false;
 	postRunningStateChangedMessage(false);
 }
 
 function handleExternalVoltageMessage(incomingMessage) {
-	const alterCommand = 'alter v.'
-			+ String(incomingMessage.sourceName)
-			+ ' dc ' + Number(incomingMessage.volts);
-	ngspiceSendCommand(alterCommand);
+	const externalSourceNameLowercase = String(incomingMessage.sourceName).toLowerCase();
+	const newTargetValueOfExternalSourceInVolts = Number(incomingMessage.volts);
+	let sourceState = externalVoltageSourceStateByLowercaseName[externalSourceNameLowercase];
+	if (sourceState === undefined) {
+		sourceState = { valueBeforeStep: 0, valueAfterStep: 0 };
+		externalVoltageSourceStateByLowercaseName[externalSourceNameLowercase] = sourceState;
+	}
+	sourceState.valueAfterStep = newTargetValueOfExternalSourceInVolts;
+	runEventDrivenShortTransientFromInitialConditionsBlocking();
 }
 
 self.addEventListener('message', function handleHostMessage(messageEvent) {
@@ -266,6 +295,7 @@ createNgspiceModule({
 	try {
 		provideFakeProcMeminfoSoNgspiceDoesNotAbort();
 		registerSharedspiceCallbacksWithNgspice();
+		registerGetVsrcDataCallbackWithNgspiceForExternalVoltageSources();
 	} catch (ngspiceInitError) {
 		postWorkerErrorMessage('ngspice init failed: ' + ngspiceInitError.message);
 		return;

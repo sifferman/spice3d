@@ -39,6 +39,16 @@ if [ ! -f "$gdextension_web_release_binary_path" ]; then
 	exit 1
 fi
 
+echo "[serve-local] re-importing project so godot recompiles .gd files into fresh .gdc cache"
+(
+	cd "$project_directory"
+	"$godot_executable_path" --headless --import 2>&1 | tee /tmp/spice3d_godot_import_log.txt | tail -5
+	if grep -qE 'SCRIPT ERROR|Parse Error|Failed to load script' /tmp/spice3d_godot_import_log.txt; then
+		echo "FAIL: import surfaced GDScript parse/load errors (see /tmp/spice3d_godot_import_log.txt)" >&2
+		exit 1
+	fi
+)
+
 echo "[serve-local] exporting web build to $exported_web_build_directory"
 mkdir -p "$exported_web_build_directory"
 (

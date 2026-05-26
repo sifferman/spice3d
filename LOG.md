@@ -6,6 +6,60 @@ description of [#1](https://github.com/sifferman/spice3d/pull/1).
 
 ---
 
+## 2026-05-26 — Drive external voltage sources via ngspice's `external` + GetVSRCData
+
+I built the button-driver around `PULSE` + `alter @<source>[pulse] = [...]`
+because I assumed ngspice didn't understand the `external` keyword
+xschem emits in its symbol templates. That was wrong: `vsrcload.c`
+in our submodule has a `case EXTERNAL:` block (gated by `#ifdef
+SHARED_MODULE` which our wasm build defines) that calls back into
+the host via `getvsrcval(time, source_name)`. The host registers
+that callback by passing a `GetVSRCData *` to `ngSpice_Init_Sync`,
+which our wasm bundle also exports. This is the real interactive-
+source mechanism — purpose-built for shared-library hosts.
+
+`scripts/benchmark-pulse-vs-external-voltage-source.js` boots
+ngspice twice and runs the same 50-toggle sequence on the same RC
+test circuit, once with `PULSE + alter @[pulse]` and once with
+`external + GetVSRCData`. Headline:
+
+| metric                            | PULSE   | external | ratio |
+|-----------------------------------|---------|----------|-------|
+| median wall ms per tran           | 1.3–1.5 | 1.1      | 0.7× (external faster)  |
+| max wall ms per tran (worst-case) | 27–54   | 2.6–3.1  | 0.1× (external 10× more consistent) |
+| total wall for 50 toggles         | 97–139  | 58–65    | ~0.5× |
+| final v(out), v(n1), branch I     | identical | identical | — |
+| sample count in last tran         | 62      | 59       | ≈ same |
+
+Same physics, smaller and more predictable wall budget. The PULSE
+worst-case spikes are likely ngspice re-parsing the
+`alter @<source>[pulse] = [...]` array on every click; external skips
+the command parser entirely.
+
+Switched `project/web/ngspice_worker.js` to register a
+`GetVSRCData` callback in
+`registerGetVsrcDataCallbackWithNgspiceForExternalVoltageSources`.
+Per-source state is `{valueBeforeStep, valueAfterStep}`; the
+callback returns `valueBeforeStep` at t=0 (so IC settles to the
+previous steady state), linearly ramps over
+`EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS = 5e-12` to
+`valueAfterStep`, then holds. After each `run` completes,
+`valueBeforeStep ← valueAfterStep` so the next click's IC starts
+from this click's settled end state.
+
+main.gd loses
+`replace_xschem_external_voltage_source_keyword_with_pulse_stanza`
+and the three `EXTERNAL_VOLTAGE_SOURCE_PULSE_*` constants — the
+xschem `VBUTTON1 net1 VGND external` line now passes straight
+through to ngspice. The combined netlist-transformer GUT test was
+flipped from "assert ` external` is stripped" to "assert ` external`
+is preserved." Updated memory
+[`wasm-ngspice-single-threaded`](feedback_wasm_ngspice_single_threaded.md)
+to recommend the external+callback path instead of the PULSE hack
+I'd previously documented there.
+
+---
+
 ## 2026-05-24 — Chunked tran/cont so `alter` actually takes effect mid-run
 
 After surfacing SendChar diagnostics + speeding up the timestep,
