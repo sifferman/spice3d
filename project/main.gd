@@ -7,11 +7,59 @@ const SiPrefixTime = preload("res://si_prefix_time_formatter.gd")
 @onready var status_background_color_rect: ColorRect = $StatusOverlay/StatusBackground
 @onready var time_warp_input_line_edit: LineEdit = $StatusOverlay/TimeWarpControl/TimeWarpInnerHBox/TimeWarpInput
 
-const ACTIVE_EXAMPLE_DIRECTORY_NAME := "button"
-const SCHEMATIC_BUNDLED_DIR := "res://examples/" + ACTIVE_EXAMPLE_DIRECTORY_NAME
-const SCHEMATIC_STAGED_DIR := "user://examples/" + ACTIVE_EXAMPLE_DIRECTORY_NAME
-const SCHEMATIC_BUNDLED_FILE_NAMES := ["button_test.sch", "button.sym"]
-const TOP_SCHEMATIC_FILE_NAME := "button_test.sch"
+const DEFAULT_EXAMPLE_DIRECTORY_NAME := "button"
+const KNOWN_EXAMPLES_BY_DIRECTORY_NAME := {
+	"button": {
+		"top_schematic_file_name": "button_test.sch",
+		"bundled_file_names": ["button_test.sch", "button.sym"],
+	},
+	"ro": {
+		"top_schematic_file_name": "ro.sch",
+		"bundled_file_names": ["ro.sch", "ro.stim"],
+	},
+}
+var active_example_directory_name: String = DEFAULT_EXAMPLE_DIRECTORY_NAME
+
+
+func active_example_metadata() -> Dictionary:
+	return KNOWN_EXAMPLES_BY_DIRECTORY_NAME[active_example_directory_name]
+
+
+func active_example_top_schematic_file_name() -> String:
+	return active_example_metadata()["top_schematic_file_name"]
+
+
+func active_example_bundled_file_names() -> Array:
+	return active_example_metadata()["bundled_file_names"]
+
+
+func active_example_bundled_directory_path() -> String:
+	return "res://examples/" + active_example_directory_name
+
+
+func active_example_staged_directory_path() -> String:
+	return "user://examples/" + active_example_directory_name
+
+
+func resolve_active_example_directory_name_from_browser_url_hash_or_default() -> String:
+	if not OS.has_feature("web"):
+		return DEFAULT_EXAMPLE_DIRECTORY_NAME
+	var location_hash_raw_text: Variant = JavaScriptBridge.eval(
+			"globalThis.location ? globalThis.location.hash : ''", true)
+	if not (location_hash_raw_text is String):
+		return DEFAULT_EXAMPLE_DIRECTORY_NAME
+	var location_hash_text: String = location_hash_raw_text
+	if location_hash_text.begins_with("#"):
+		location_hash_text = location_hash_text.substr(1)
+	for one_hash_segment in location_hash_text.split("&"):
+		var one_segment_pieces := one_hash_segment.split("=", true, 1)
+		if one_segment_pieces.size() == 2 and one_segment_pieces[0] == "example":
+			var requested_example_directory_name: String = one_segment_pieces[1]
+			if KNOWN_EXAMPLES_BY_DIRECTORY_NAME.has(requested_example_directory_name):
+				return requested_example_directory_name
+			print("[spice3d] ignoring unknown ?example= value: %s" % requested_example_directory_name)
+			return DEFAULT_EXAMPLE_DIRECTORY_NAME
+	return DEFAULT_EXAMPLE_DIRECTORY_NAME
 
 const XSCHEM_UPSTREAM_GIT_SHA := "d7f3980301eb9f12954a8542d55b188ffe851770"
 const XSCHEM_JSDELIVR_FILE_LISTING_URL := \
@@ -45,6 +93,8 @@ const SKY130_PDK_RES_BUNDLED_FILES_TO_STAGE_INTO_WORKER_FILESYSTEM := [
 
 
 func _ready() -> void:
+	active_example_directory_name = resolve_active_example_directory_name_from_browser_url_hash_or_default()
+	print("[spice3d] active example: %s" % active_example_directory_name)
 	populate_time_warp_option_button_with_supported_units()
 	set_status_label_text_to_loading_phase("Setting up Godot scene")
 	request_persistent_browser_storage_on_web()
@@ -60,7 +110,7 @@ func _ready() -> void:
 	set_status_label_text_to_loading_phase("Downloading sky130 PDK (~20 MB)")
 	await ensure_sky130_pdk_is_cached_using_extractor_node(spice3d_root_node, sky130_ciel_version)
 	set_status_label_text_to_loading_phase("Loading schematic")
-	var staged_top_schematic_absolute_path := absolute_path_for_staged_schematic_file(TOP_SCHEMATIC_FILE_NAME)
+	var staged_top_schematic_absolute_path := absolute_path_for_staged_schematic_file(active_example_top_schematic_file_name())
 	var extra_symbol_search_directories := PackedStringArray([
 		absolute_path_for_xschem_devices_library_directory(),
 		absolute_path_for_sky130_xschem_library_directory_for_sky130a_variant(sky130_ciel_version),
@@ -447,7 +497,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-G: continuous step-N tran + T-change snapshot+reload")
+	print("[spice3d] BUILD-MARKER 2026-05-26-H: continuous step-N + RO via ?example=ro")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
@@ -571,10 +621,10 @@ func request_persistent_browser_storage_on_web() -> void:
 
 
 func stage_bundled_schematic_files_to_writable_directory() -> void:
-	DirAccess.make_dir_recursive_absolute(SCHEMATIC_STAGED_DIR)
-	for one_bundled_file_name in SCHEMATIC_BUNDLED_FILE_NAMES:
-		var bundled_source_path := "%s/%s" % [SCHEMATIC_BUNDLED_DIR, one_bundled_file_name]
-		var staged_destination_path := "%s/%s" % [SCHEMATIC_STAGED_DIR, one_bundled_file_name]
+	DirAccess.make_dir_recursive_absolute(active_example_staged_directory_path())
+	for one_bundled_file_name in active_example_bundled_file_names():
+		var bundled_source_path := "%s/%s" % [active_example_bundled_directory_path(), one_bundled_file_name]
+		var staged_destination_path := "%s/%s" % [active_example_staged_directory_path(), one_bundled_file_name]
 		copy_file_via_godot_filesystem(bundled_source_path, staged_destination_path)
 
 
@@ -846,7 +896,7 @@ func copy_file_via_godot_filesystem(source_path: String, destination_path: Strin
 
 
 func absolute_path_for_staged_schematic_file(staged_file_name: String) -> String:
-	return "%s/examples/%s/%s" % [OS.get_user_data_dir(), ACTIVE_EXAMPLE_DIRECTORY_NAME, staged_file_name]
+	return "%s/examples/%s/%s" % [OS.get_user_data_dir(), active_example_directory_name, staged_file_name]
 
 
 func absolute_path_for_xschem_devices_library_directory() -> String:
