@@ -114,10 +114,34 @@ function readVecInfoAllStructIntoOrderedNodeNames(initialVectorInfoPointer) {
 	return orderedNodeNames;
 }
 
+// ngspice prints these on every `step N` halt because it has no way to
+// distinguish a deliberate counter-driven pause from a user-initiated
+// abort — all paths go through the same E_PAUSE return in dctran.c:457
+// → runcoms2.c which calls fprintf(cp_err, "simulation interrupted\n").
+// Under spice3d's chunked-tran architecture this fires once per chunk
+// (every ~200 ms), flooding the console with what look like errors.
+// Filter them at the worker boundary; the chunk-loop diagnostics already
+// surface any real problem (no-progress bail-out, compute saturation).
+const NGSPICE_SENDCHAR_LINE_PREFIXES_TO_SUPPRESS_AS_EXPECTED_STEP_N_NOISE = [
+	'stderr simulation interrupted',
+	'stderr doAnalyses: pause requested',
+	'stdout Doing analysis at TEMP',
+	'stdout Note: Stopped after',
+	'stderr Warning: can\'t find the initialization file spinit',
+];
+
+function shouldSuppressNgspiceSendCharLineAsExpectedStepNNoise(oneLineFromNgspice) {
+	for (const onePrefix of NGSPICE_SENDCHAR_LINE_PREFIXES_TO_SUPPRESS_AS_EXPECTED_STEP_N_NOISE) {
+		if (oneLineFromNgspice.startsWith(onePrefix)) return true;
+	}
+	return false;
+}
+
 function registerSharedspiceCallbacksWithNgspice() {
 	const sendCharCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
 			function forwardSendCharOutputToBridge(textPointer, libraryInstanceId, userDataPointer) {
 				const oneLineFromNgspice = ngspiceWebAssemblyModule.UTF8ToString(textPointer);
+				if (shouldSuppressNgspiceSendCharLineAsExpectedStepNNoise(oneLineFromNgspice)) return 0;
 				postNgspiceDiagnosticMessage('SendChar', oneLineFromNgspice);
 				return 0;
 			},

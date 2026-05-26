@@ -66,10 +66,10 @@ func test_parser_rejects_value_above_one_thousand() -> void:
 			"Numeric values above 1000 must be rejected to bound the time-warp range.")
 
 
-func test_parser_rejects_zero() -> void:
+func test_parser_accepts_zero_as_pause_sentinel() -> void:
 	var parsed_value: float = loaded_main_script_instance.parse_time_warp_input_text_to_simulated_seconds_per_real_second("0 ns")
-	assert_true(is_nan(parsed_value),
-			"Zero must be rejected — a zero sim:wall ratio is undefined.")
+	assert_eq(parsed_value, 0.0,
+			"'0 ns' should parse as the pause sentinel (T=0 means the simulator halts and the wires hold their last state).")
 
 
 func test_parser_rejects_negative() -> void:

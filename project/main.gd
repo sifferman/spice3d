@@ -149,19 +149,24 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 	var parsed_simulated_seconds_per_real_second: float = parse_time_warp_input_text_to_simulated_seconds_per_real_second(
 			submitted_input_text)
 	if is_nan(parsed_simulated_seconds_per_real_second):
-		print("[spice3d] ignored invalid time-warp input %s — expected '<1-1000> <ps|ns|us>'" % [
+		print("[spice3d] ignored invalid time-warp input %s — expected '<0-1000> <ps|ns|us>'" % [
 				JSON.stringify(submitted_input_text)])
 		time_warp_input_line_edit.text = format_simulated_seconds_per_real_second_as_input_text(
 				currently_selected_time_warp_simulated_seconds_per_real_second)
 		return
 	currently_selected_time_warp_simulated_seconds_per_real_second = parsed_simulated_seconds_per_real_second
-	print("[spice3d] time-warp set to %s sim-time per real-second (timestep=%s)" % [
-			SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
-			SiPrefixTime.format_seconds_with_si_prefix(compute_transient_timestep_seconds_for_current_time_warp())])
 	var discarded_old_pace_sample_count := queued_samples_awaiting_playback_to_wires.size()
 	queued_samples_awaiting_playback_to_wires.clear()
 	if discarded_old_pace_sample_count > 0:
 		print("[spice3d] discarded %d queued sample(s) from previous time-warp setting" % discarded_old_pace_sample_count)
+	if currently_selected_time_warp_simulated_seconds_per_real_second == 0.0:
+		print("[spice3d] time-warp set to 0 — simulation paused; wires hold last displayed state")
+		if spice3d_root_node_for_sample_polling != null:
+			spice3d_root_node_for_sample_polling.halt_simulation_on_web_simulator()
+		return
+	print("[spice3d] time-warp set to %s sim-time per real-second (timestep=%s)" % [
+			SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
+			SiPrefixTime.format_seconds_with_si_prefix(compute_transient_timestep_seconds_for_current_time_warp())])
 	if spice3d_root_node_for_sample_polling != null:
 		spice3d_root_node_for_sample_polling.update_time_warp_timestep_on_web_simulator(
 				compute_transient_timestep_seconds_for_current_time_warp())
@@ -183,8 +188,10 @@ func parse_time_warp_input_text_to_simulated_seconds_per_real_second(input_text:
 	if not numeric_text_without_unit_suffix.is_valid_float():
 		return NAN
 	var numeric_value: float = numeric_text_without_unit_suffix.to_float()
-	if numeric_value <= 0.0 or numeric_value > TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE:
+	if numeric_value < 0.0 or numeric_value > TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE:
 		return NAN
+	# numeric_value == 0 is a deliberate "pause" sentinel — main.gd halts the
+	# worker chunk loop in this case so the queue doesn't keep filling up.
 	return numeric_value * unit_multiplier_in_seconds
 
 
@@ -543,7 +550,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-U: more solver-tolerance knobs; drop FO4 load caps")
+	print("[spice3d] BUILD-MARKER 2026-05-26-V: T=0 paused; suppress per-step-N stderr noise")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
