@@ -238,7 +238,11 @@ function buildDeckLinesWithInitialConditionsAndTransientAnalysis(initialConditio
 			+ ' ' + SIMULATION_TSTOP_FAR_BEYOND_ANY_SESSION_SECONDS
 			+ ' 0 ' + currentTransientTimestepInSeconds
 			+ tranTrailingUicSuffix;
-	const fullyAssembledDeckLines = baseDeckLinesWithoutInitialConditions.slice();
+	const fullyAssembledDeckLines = [];
+	for (const oneBaseDeckLine of baseDeckLinesWithoutInitialConditions) {
+		if (String(oneBaseDeckLine).trim().toLowerCase() === '.end') continue;
+		fullyAssembledDeckLines.push(oneBaseDeckLine);
+	}
 	for (const oneInitialConditionLine of initialConditionLines) {
 		fullyAssembledDeckLines.push(oneInitialConditionLine);
 	}

@@ -15,7 +15,7 @@ const KNOWN_EXAMPLES_BY_DIRECTORY_NAME := {
 	},
 	"ro": {
 		"top_schematic_file_name": "ro.sch",
-		"bundled_file_names": ["ro.sch", "ro.stim"],
+		"bundled_file_names": ["ro.sch"],
 	},
 }
 var active_example_directory_name: String = DEFAULT_EXAMPLE_DIRECTORY_NAME
@@ -368,24 +368,22 @@ func is_subckt_wrapper_directive(spice_netlist_line: String) -> bool:
 const SKY130_INV_4_PIN_INPUT_CAPACITANCE_IN_SPICE_LITERAL := "7.4f"
 
 
-func extract_output_net_name_from_xschem_pininfo_comment_or_empty(spice_netlist_line: String) -> String:
-	# xschem2spice emits one comment per pin in the form `*.PININFO <net>:<dir>`
-	# where <dir> is 'O' for outputs, 'I' for inputs, 'B' for bidirectional.
-	# We attach a load capacitor only to outputs so the inverter (or whatever
-	# drives the pin) sees a realistic FO4 capacitive load instead of a
-	# parasitic-only floating node that switches in sub-picoseconds.
+func extract_output_net_names_from_xschem_pininfo_comment(spice_netlist_line: String) -> PackedStringArray:
+	var output_net_names := PackedStringArray()
 	var trimmed := spice_netlist_line.strip_edges()
 	const PININFO_DIRECTIVE_PREFIX := "*.PININFO"
 	if not trimmed.begins_with(PININFO_DIRECTIVE_PREFIX):
-		return ""
+		return output_net_names
 	var after_directive_prefix := trimmed.substr(PININFO_DIRECTIVE_PREFIX.length()).strip_edges()
-	var colon_position := after_directive_prefix.find(":")
-	if colon_position < 0:
-		return ""
-	var direction_suffix := after_directive_prefix.substr(colon_position + 1).strip_edges().to_upper()
-	if not direction_suffix.begins_with("O"):
-		return ""
-	return after_directive_prefix.substr(0, colon_position).strip_edges()
+	for one_pin_direction_token in after_directive_prefix.split(" ", false):
+		var colon_position := one_pin_direction_token.find(":")
+		if colon_position <= 0:
+			continue
+		var direction_suffix := one_pin_direction_token.substr(colon_position + 1).strip_edges().to_upper()
+		if not direction_suffix.begins_with("O"):
+			continue
+		output_net_names.append(one_pin_direction_token.substr(0, colon_position).strip_edges())
+	return output_net_names
 
 
 const POWER_RAIL_NAMES_NEVER_TREATED_AS_INTERNAL_NETS := {
@@ -456,9 +454,8 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 	var output_net_names_to_load_with_fo4_capacitor := PackedStringArray()
 	var raw_xschem_netlist_contained_a_dot_end_directive := false
 	for one_existing_line in raw_xschem_netlist_lines:
-		var output_net_name := extract_output_net_name_from_xschem_pininfo_comment_or_empty(one_existing_line)
-		if not output_net_name.is_empty():
-			output_net_names_to_load_with_fo4_capacitor.append(output_net_name)
+		for one_output_net_name in extract_output_net_names_from_xschem_pininfo_comment(one_existing_line):
+			output_net_names_to_load_with_fo4_capacitor.append(one_output_net_name)
 		if is_subckt_wrapper_directive(one_existing_line):
 			continue
 		# Hold back `.end` so we can append FO4 output-load caps *before* it.
@@ -497,7 +494,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-H: continuous step-N + RO via ?example=ro")
+	print("[spice3d] BUILD-MARKER 2026-05-26-I: strip stray .end before worker .tran")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
