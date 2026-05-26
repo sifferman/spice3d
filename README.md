@@ -51,12 +51,19 @@ scripts/serve-local-web-export.sh
 Prerequisites — these are the same artifacts the CI build needs,
 just produced locally one time:
 
-1. `scripts/build-ngspice-for-emscripten.sh` — produces
-   `third_party/ngspice/build-emscripten/ngspice.{js,wasm}`.
-2. `scons -j"$(nproc)" target=template_release platform=web arch=wasm32 precision=single threads=no`
-   — produces the web template-release GDExtension wasm.
-3. A Godot 4.4.1 binary on `PATH` as `godot` (override with
-   `GODOT_EXECUTABLE_PATH=...`).
+1. `scripts/install-godot.sh` — downloads Godot 4.4.1-stable and
+   its export templates to `$HOME/godot` and
+   `~/.local/share/godot/export_templates/4.4.1.stable/`
+   (idempotent, skips downloads when files already exist). The
+   serve script auto-falls back to `$HOME/godot` when no `godot`
+   is on `PATH`; you can also point at a Godot install elsewhere
+   with `GODOT_EXECUTABLE_PATH=...`.
+2. `scripts/build-ngspice-for-emscripten.sh` — produces
+   `third_party/ngspice/build-emscripten/ngspice.{js,wasm}`
+   (needs Emscripten on `PATH`).
+3. `scons -j"$(nproc)" target=template_release platform=web arch=wasm32 precision=single threads=no`
+   — produces the web template-release GDExtension wasm at
+   `project/bin/web/libspice3d.web.template_release.wasm32.nothreads.wasm`.
 
 The script exports the project to `build-web-local/`, copies the
 ngspice bridge + worker JS, copies the ngspice wasm artifacts,

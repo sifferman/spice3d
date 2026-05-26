@@ -18,8 +18,15 @@ godot_executable_path="${GODOT_EXECUTABLE_PATH:-godot}"
 local_http_server_port="${SPICE3D_LOCAL_HTTP_SERVER_PORT:-8000}"
 
 if ! command -v "$godot_executable_path" >/dev/null 2>&1; then
-	echo "FAIL: godot binary not on PATH (set GODOT_EXECUTABLE_PATH or install Godot 4.4.1)" >&2
-	exit 1
+	fallback_godot_executable_path="$HOME/godot"
+	if [ -z "${GODOT_EXECUTABLE_PATH:-}" ] && [ -x "$fallback_godot_executable_path" ]; then
+		godot_executable_path="$fallback_godot_executable_path"
+	else
+		echo "FAIL: godot binary not on PATH and not at \$HOME/godot." >&2
+		echo "      Run scripts/install-godot.sh to install Godot 4.4.1, or set" >&2
+		echo "      GODOT_EXECUTABLE_PATH to an existing Godot binary." >&2
+		exit 1
+	fi
 fi
 if [ ! -f "$ngspice_wasm_build_directory/ngspice.wasm" ]; then
 	echo "FAIL: ngspice.wasm not found at $ngspice_wasm_build_directory" >&2
