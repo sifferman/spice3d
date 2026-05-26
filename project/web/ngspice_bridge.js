@@ -34,24 +34,28 @@
 			return true;
 		},
 
-		loadNetlistLines: function loadNetlistLines(netlistLines) {
-			if (!this.ngspiceWorker) {
-				return false;
-			}
-			this.ngspiceWorker.postMessage({ messageKind: 'loadNetlist', netlistLines: netlistLines });
-			return true;
-		},
-
-		startTransientAnalysis: function startTransientAnalysis(timestepSeconds, stopTimeSeconds) {
+		loadNetlistLinesWithTimestepAndInternalNetsToSeed: function loadNetlistLinesWithTimestepAndInternalNetsToSeed(
+				netlistLines, timestepSeconds, internalNetNamesToSeedAtHalfVdd) {
 			if (!this.ngspiceWorker) {
 				return false;
 			}
 			this.ngspiceWorker.postMessage({
-				messageKind: 'startTransient',
+				messageKind: 'loadNetlist',
+				netlistLines: netlistLines,
 				timestepSeconds: timestepSeconds,
-				stopTimeSeconds: stopTimeSeconds,
+				internalNetNamesToSeedAtHalfVdd: internalNetNamesToSeedAtHalfVdd,
 			});
-			this.isSimulationRunning = true;
+			return true;
+		},
+
+		updateTimeWarpTimestep: function updateTimeWarpTimestep(timestepSeconds) {
+			if (!this.ngspiceWorker) {
+				return false;
+			}
+			this.ngspiceWorker.postMessage({
+				messageKind: 'setTimeWarp',
+				timestepSeconds: timestepSeconds,
+			});
 			return true;
 		},
 

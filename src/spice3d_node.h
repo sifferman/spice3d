@@ -43,8 +43,11 @@ public:
 			const godot::String &schematic_file_path,
 			const godot::String &xschemrc_file_path,
 			const godot::PackedStringArray &extra_symbol_search_directories);
-	bool push_netlist_lines_to_web_simulator(const godot::PackedStringArray &netlist_lines);
-	bool start_transient_analysis_on_web_simulator(double timestep_seconds, double stop_time_seconds);
+	bool push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
+			const godot::PackedStringArray &netlist_lines,
+			double timestep_seconds,
+			const godot::PackedStringArray &internal_net_names_to_seed_at_half_vdd);
+	bool update_time_warp_timestep_on_web_simulator(double timestep_seconds);
 	void halt_simulation_on_web_simulator();
 	void set_external_voltage_source_on_web_simulator(const godot::String &source_name, double volts);
 	godot::Array drain_buffered_simulation_samples_from_web_simulator();

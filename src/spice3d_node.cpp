@@ -863,12 +863,12 @@ void Spice3DNode::_bind_methods() {
 					"extra_symbol_search_directories"),
 			&Spice3DNode::generate_spice_netlist_for_schematic_file);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("push_netlist_lines_to_web_simulator", "netlist_lines"),
-			&Spice3DNode::push_netlist_lines_to_web_simulator);
+			godot::D_METHOD("push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed",
+					"netlist_lines", "timestep_seconds", "internal_net_names_to_seed_at_half_vdd"),
+			&Spice3DNode::push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("start_transient_analysis_on_web_simulator",
-					"timestep_seconds", "stop_time_seconds"),
-			&Spice3DNode::start_transient_analysis_on_web_simulator);
+			godot::D_METHOD("update_time_warp_timestep_on_web_simulator", "timestep_seconds"),
+			&Spice3DNode::update_time_warp_timestep_on_web_simulator);
 	godot::ClassDB::bind_method(
 			godot::D_METHOD("halt_simulation_on_web_simulator"),
 			&Spice3DNode::halt_simulation_on_web_simulator);
@@ -1057,31 +1057,38 @@ godot::String json_encode_packed_string_array(const godot::PackedStringArray &li
 
 } // namespace
 
-bool Spice3DNode::push_netlist_lines_to_web_simulator(const godot::PackedStringArray &netlist_lines) {
+bool Spice3DNode::push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
+		const godot::PackedStringArray &netlist_lines,
+		double timestep_seconds,
+		const godot::PackedStringArray &internal_net_names_to_seed_at_half_vdd) {
 #ifdef WEB_ENABLED
 	const godot::String json_encoded_lines = json_encode_packed_string_array(netlist_lines);
+	const godot::String json_encoded_internal_nets = json_encode_packed_string_array(
+			internal_net_names_to_seed_at_half_vdd);
 	const godot::String javascript_to_evaluate = godot::String(
-			"globalThis.spice3d && globalThis.spice3d.loadNetlistLines("
-			) + json_encoded_lines + godot::String(");");
+			"globalThis.spice3d && globalThis.spice3d.loadNetlistLinesWithTimestepAndInternalNetsToSeed("
+			) + json_encoded_lines + godot::String(",")
+			+ godot::String::num(timestep_seconds) + godot::String(",")
+			+ json_encoded_internal_nets + godot::String(");");
 	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
 	return true;
 #else
 	(void)netlist_lines;
+	(void)timestep_seconds;
+	(void)internal_net_names_to_seed_at_half_vdd;
 	return false;
 #endif
 }
 
-bool Spice3DNode::start_transient_analysis_on_web_simulator(double timestep_seconds, double stop_time_seconds) {
+bool Spice3DNode::update_time_warp_timestep_on_web_simulator(double timestep_seconds) {
 #ifdef WEB_ENABLED
 	const godot::String javascript_to_evaluate =
-			godot::String("globalThis.spice3d && globalThis.spice3d.startTransientAnalysis(")
-			+ godot::String::num(timestep_seconds) + godot::String(",")
-			+ godot::String::num(stop_time_seconds) + godot::String(");");
+			godot::String("globalThis.spice3d && globalThis.spice3d.updateTimeWarpTimestep(")
+			+ godot::String::num(timestep_seconds) + godot::String(");");
 	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
 	return true;
 #else
 	(void)timestep_seconds;
-	(void)stop_time_seconds;
 	return false;
 #endif
 }

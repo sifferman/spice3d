@@ -1,8 +1,22 @@
 // Web Worker that hosts the ngspice sharedspice WebAssembly module
-// (built with --with-ngshared). The bridge in ngspice_bridge.js posts
-// messages here describing what the host wants (loadNetlist /
-// startTransient / halt / externalVoltage), and we stream simulation
-// samples back via postMessage as ngspice's SendData callback fires.
+// (built with --with-ngshared). The host sends:
+//   loadNetlist       — initial deck (with deck-level `.tran`)
+//   externalVoltage   — update a `external` voltage source mid-sim
+//   setTimeWarp       — change simulated-seconds-per-real-second
+//   installFileText   — stage one PDK file into the worker's memfs
+//   halt              — pause the chunk loop
+//
+// We stream samples back via SendData → simulationSample postMessage.
+//
+// Execution model: one in-progress ngspice `tran` is kept alive
+// indefinitely via `step <samples_per_chunk>` issued between
+// `setTimeout` yields. Voltage changes mutate per-source ramp state
+// between chunks; the next solver step picks up the new target.
+// Time-warp changes snapshot every node voltage from the last
+// emitted sample, rebuild the deck with `.ic v(node)=value` + a new
+// `.tran` line, and reload via ngSpice_Circ — preserving circuit
+// trajectory across the TSTEP change (validated by
+// scripts/test-ngspice-wasm-snapshot-restart-correctness.js).
 
 importScripts('ngspice.js');
 
@@ -13,9 +27,25 @@ const FAKE_PROC_MEMINFO_TEXT_FOR_NGSPICE_BUFFER_SIZING = [
 	'',
 ].join('\n');
 
+const TARGET_NUMBER_OF_SAMPLES_PLAYED_BACK_PER_WALL_SECOND = 30;
+const NUMBER_OF_SAMPLES_PER_CHUNK_BETWEEN_SET_TIMEOUT_YIELDS = 6;
+const WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS =
+		(NUMBER_OF_SAMPLES_PER_CHUNK_BETWEEN_SET_TIMEOUT_YIELDS * 1000.0)
+		/ TARGET_NUMBER_OF_SAMPLES_PLAYED_BACK_PER_WALL_SECOND;
+const EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS = 5e-12;
+const SIMULATION_TSTOP_FAR_BEYOND_ANY_SESSION_SECONDS = 1.0e-3;
+const INITIAL_CONDITION_SEED_VOLTAGE_VOLTS = 0.9;
+
 let ngspiceWebAssemblyModule = null;
 let ngspiceSendCommand = null;
 let orderedNodeNamesFromLatestInit = null;
+let baseDeckLinesWithoutInitialConditions = [];
+let internalNetNamesEligibleForInitialConditionSeed = [];
+let currentTransientTimestepInSeconds = 1.0e-12;
+let lastObservedSampleSimulationTimeSeconds = 0.0;
+let lastObservedNodeVoltagesByName = Object.create(null);
+let chunkLoopShouldKeepRunning = false;
+const externalVoltageSourceStateByLowercaseName = Object.create(null);
 
 function postWorkerErrorMessage(errorText) {
 	self.postMessage({ messageKind: 'error', errorText: errorText });
@@ -56,6 +86,7 @@ function readVecValuesAllStructIntoSample(allVectorValuesPointer) {
 	const vectorEntryArrayPointer = ngspiceWebAssemblyModule.HEAPU32[(allVectorValuesPointer + 8) >> 2];
 	let simulationTimeSeconds = 0.0;
 	const orderedNodeVoltages = new Array(vectorCount);
+	const nodeVoltagesByName = Object.create(null);
 	for (let vectorIndex = 0; vectorIndex < vectorCount; ++vectorIndex) {
 		const vectorEntryPointer = ngspiceWebAssemblyModule.HEAPU32[(vectorEntryArrayPointer >> 2) + vectorIndex];
 		const namePointer = ngspiceWebAssemblyModule.HEAPU32[vectorEntryPointer >> 2];
@@ -63,8 +94,9 @@ function readVecValuesAllStructIntoSample(allVectorValuesPointer) {
 		const vectorName = ngspiceWebAssemblyModule.UTF8ToString(namePointer);
 		if (vectorName === 'time') simulationTimeSeconds = realPartOfValue;
 		orderedNodeVoltages[vectorIndex] = realPartOfValue;
+		nodeVoltagesByName[vectorName] = realPartOfValue;
 	}
-	return { simulationTimeSeconds, orderedNodeVoltages };
+	return { simulationTimeSeconds, orderedNodeVoltages, nodeVoltagesByName };
 }
 
 function readVecInfoAllStructIntoOrderedNodeNames(initialVectorInfoPointer) {
@@ -105,6 +137,8 @@ function registerSharedspiceCallbacksWithNgspice() {
 	const sendDataCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
 			function publishSimulationSample(allVectorValuesPointer, vectorCount, libraryInstanceId, userDataPointer) {
 				const sample = readVecValuesAllStructIntoSample(allVectorValuesPointer);
+				lastObservedSampleSimulationTimeSeconds = sample.simulationTimeSeconds;
+				lastObservedNodeVoltagesByName = sample.nodeVoltagesByName;
 				postSimulationSampleMessage(sample.simulationTimeSeconds, sample.orderedNodeVoltages);
 				return 0;
 			},
@@ -135,38 +169,6 @@ function registerSharedspiceCallbacksWithNgspice() {
 	}
 }
 
-function provideFakeProcMeminfoSoNgspiceDoesNotAbort() {
-	ngspiceWebAssemblyModule.FS.mkdirTree('/proc');
-	ngspiceWebAssemblyModule.FS.writeFile('/proc/meminfo', FAKE_PROC_MEMINFO_TEXT_FOR_NGSPICE_BUFFER_SIZING);
-}
-
-function feedNetlistLinesIntoNgspice(netlistLines) {
-	for (const oneLine of netlistLines) {
-		ngspiceSendCommand('circbyline ' + String(oneLine));
-	}
-}
-
-function handleLoadNetlistMessage(incomingMessage) {
-	feedNetlistLinesIntoNgspice(incomingMessage.netlistLines || []);
-	ngspiceSendCommand('save none');
-}
-
-const EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS = 5e-12;
-
-let configuredTransientTimestepInSeconds = 0;
-let configuredTransientStopTimeInSecondsPerEventDrivenRun = 0;
-
-// State for each ngspice "external" voltage source. ngspice's
-// GetVSRCData callback (registered via ngSpice_Init_Sync) asks for
-// the source value at a given simulated time on every solver step.
-// At t = 0 we return valueBeforeStep so ngspice's IC solver settles
-// to the previous steady state; for t > 0 we linearly ramp toward
-// valueAfterStep over EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS,
-// then hold there. After each tran completes, valueBeforeStep
-// catches up to valueAfterStep so the next click's IC starts from
-// this click's end state.
-const externalVoltageSourceStateByLowercaseName = Object.create(null);
-
 function registerGetVsrcDataCallbackWithNgspiceForExternalVoltageSources() {
 	const getVsrcDataCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
 			function returnExternalVoltageSourceValueAtSimulatedTime(
@@ -176,14 +178,15 @@ function registerGetVsrcDataCallbackWithNgspiceForExternalVoltageSources() {
 				const sourceState = externalVoltageSourceStateByLowercaseName[sourceName.toLowerCase()];
 				let valueToReturn = 0;
 				if (sourceState !== undefined) {
-					if (simulatedTime <= 0) {
-						valueToReturn = sourceState.valueBeforeStep;
-					} else if (simulatedTime >= EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS) {
-						valueToReturn = sourceState.valueAfterStep;
+					const elapsedSinceMostRecentRampStart = simulatedTime - sourceState.rampStartSimulatedTime;
+					if (elapsedSinceMostRecentRampStart <= 0) {
+						valueToReturn = sourceState.valueBeforeMostRecentRamp;
+					} else if (elapsedSinceMostRecentRampStart >= EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS) {
+						valueToReturn = sourceState.valueAfterMostRecentRamp;
 					} else {
-						const lerpFraction = simulatedTime / EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS;
-						valueToReturn = sourceState.valueBeforeStep
-								+ (sourceState.valueAfterStep - sourceState.valueBeforeStep) * lerpFraction;
+						const lerpFraction = elapsedSinceMostRecentRampStart / EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS;
+						valueToReturn = sourceState.valueBeforeMostRecentRamp
+								+ (sourceState.valueAfterMostRecentRamp - sourceState.valueBeforeMostRecentRamp) * lerpFraction;
 					}
 				}
 				ngspiceWebAssemblyModule.HEAPF64[resultDoublePointer >> 3] = valueToReturn;
@@ -197,28 +200,124 @@ function registerGetVsrcDataCallbackWithNgspiceForExternalVoltageSources() {
 	}
 }
 
-function runEventDrivenShortTransientFromInitialConditionsBlocking() {
-	postRunningStateChangedMessage(true);
-	// Pass tstep as the 4th argument (tmax) too so ngspice's adaptive solver
-	// can't take strides larger than tstep once the inverter settles. Without
-	// this the solver leaps from ~200 ps straight to tstop with no samples
-	// in between, leaving the playback animation visibly choppy.
-	ngspiceSendCommand('tran '
-			+ configuredTransientTimestepInSeconds + ' '
-			+ configuredTransientStopTimeInSecondsPerEventDrivenRun + ' 0 '
-			+ configuredTransientTimestepInSeconds);
-	ngspiceSendCommand('run');
-	for (const oneSourceName in externalVoltageSourceStateByLowercaseName) {
-		const sourceState = externalVoltageSourceStateByLowercaseName[oneSourceName];
-		sourceState.valueBeforeStep = sourceState.valueAfterStep;
-	}
-	postRunningStateChangedMessage(false);
+function provideFakeProcMeminfoSoNgspiceDoesNotAbort() {
+	ngspiceWebAssemblyModule.FS.mkdirTree('/proc');
+	ngspiceWebAssemblyModule.FS.writeFile('/proc/meminfo', FAKE_PROC_MEMINFO_TEXT_FOR_NGSPICE_BUFFER_SIZING);
 }
 
-function handleStartTransientMessage(incomingMessage) {
-	configuredTransientTimestepInSeconds = Number(incomingMessage.timestepSeconds);
-	configuredTransientStopTimeInSecondsPerEventDrivenRun = Number(incomingMessage.stopTimeSeconds);
-	runEventDrivenShortTransientFromInitialConditionsBlocking();
+function feedDeckLinesIntoNgspiceViaCircByline(deckLines) {
+	for (const oneLine of deckLines) {
+		ngspiceSendCommand('circbyline ' + String(oneLine));
+	}
+}
+
+function buildSeedInitialConditionLinesForInternalNets() {
+	const seedInitialConditionLines = [];
+	for (const oneInternalNetName of internalNetNamesEligibleForInitialConditionSeed) {
+		seedInitialConditionLines.push(
+				'.ic v(' + oneInternalNetName + ')=' + INITIAL_CONDITION_SEED_VOLTAGE_VOLTS);
+	}
+	return seedInitialConditionLines;
+}
+
+function buildSnapshotInitialConditionLinesFromLastObservedSample() {
+	const snapshotInitialConditionLines = [];
+	for (const oneNodeName of Object.keys(lastObservedNodeVoltagesByName)) {
+		if (oneNodeName === 'time' || oneNodeName === '0') continue;
+		if (oneNodeName.indexOf('#') !== -1) continue;
+		const oneVoltageVolts = lastObservedNodeVoltagesByName[oneNodeName];
+		snapshotInitialConditionLines.push(
+				'.ic v(' + oneNodeName + ')=' + oneVoltageVolts);
+	}
+	return snapshotInitialConditionLines;
+}
+
+function buildDeckLinesWithInitialConditionsAndTransientAnalysis(initialConditionLines, useInitialConditionsFlag) {
+	const tranTrailingUicSuffix = useInitialConditionsFlag ? ' uic' : '';
+	const tranLine = '.tran ' + currentTransientTimestepInSeconds
+			+ ' ' + SIMULATION_TSTOP_FAR_BEYOND_ANY_SESSION_SECONDS
+			+ ' 0 ' + currentTransientTimestepInSeconds
+			+ tranTrailingUicSuffix;
+	const fullyAssembledDeckLines = baseDeckLinesWithoutInitialConditions.slice();
+	for (const oneInitialConditionLine of initialConditionLines) {
+		fullyAssembledDeckLines.push(oneInitialConditionLine);
+	}
+	fullyAssembledDeckLines.push(tranLine);
+	fullyAssembledDeckLines.push('.end');
+	return fullyAssembledDeckLines;
+}
+
+function loadAssembledDeckIntoNgspiceAndPrimeForChunking(initialConditionLines, useInitialConditionsFlag) {
+	const fullyAssembledDeckLines = buildDeckLinesWithInitialConditionsAndTransientAnalysis(
+			initialConditionLines, useInitialConditionsFlag);
+	feedDeckLinesIntoNgspiceViaCircByline(fullyAssembledDeckLines);
+	ngspiceSendCommand('save none');
+}
+
+function runOneStepNChunkAndYield() {
+	if (!chunkLoopShouldKeepRunning) {
+		postRunningStateChangedMessage(false);
+		return;
+	}
+	ngspiceSendCommand('step ' + NUMBER_OF_SAMPLES_PER_CHUNK_BETWEEN_SET_TIMEOUT_YIELDS);
+	setTimeout(runOneStepNChunkAndYield, WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS);
+}
+
+function startContinuousChunkLoop() {
+	if (chunkLoopShouldKeepRunning) return;
+	chunkLoopShouldKeepRunning = true;
+	postRunningStateChangedMessage(true);
+	setTimeout(runOneStepNChunkAndYield, 0);
+}
+
+function handleLoadNetlistMessage(incomingMessage) {
+	chunkLoopShouldKeepRunning = false;
+	lastObservedSampleSimulationTimeSeconds = 0.0;
+	lastObservedNodeVoltagesByName = Object.create(null);
+	for (const oneSourceName of Object.keys(externalVoltageSourceStateByLowercaseName)) {
+		delete externalVoltageSourceStateByLowercaseName[oneSourceName];
+	}
+	baseDeckLinesWithoutInitialConditions = (incomingMessage.netlistLines || []).slice();
+	internalNetNamesEligibleForInitialConditionSeed = (incomingMessage.internalNetNamesToSeedAtHalfVdd || []).slice();
+	currentTransientTimestepInSeconds = Number(incomingMessage.timestepSeconds) || 1.0e-12;
+	const seedInitialConditionLines = buildSeedInitialConditionLinesForInternalNets();
+	const useInitialConditionsFlag = seedInitialConditionLines.length > 0;
+	loadAssembledDeckIntoNgspiceAndPrimeForChunking(seedInitialConditionLines, useInitialConditionsFlag);
+	startContinuousChunkLoop();
+}
+
+function handleSetTimeWarpMessage(incomingMessage) {
+	const requestedTimestepSeconds = Number(incomingMessage.timestepSeconds);
+	if (!isFinite(requestedTimestepSeconds) || requestedTimestepSeconds <= 0) return;
+	chunkLoopShouldKeepRunning = false;
+	currentTransientTimestepInSeconds = requestedTimestepSeconds;
+	const snapshotInitialConditionLines = buildSnapshotInitialConditionLinesFromLastObservedSample();
+	const useInitialConditionsFlag = snapshotInitialConditionLines.length > 0;
+	loadAssembledDeckIntoNgspiceAndPrimeForChunking(snapshotInitialConditionLines, useInitialConditionsFlag);
+	for (const oneSourceName of Object.keys(externalVoltageSourceStateByLowercaseName)) {
+		const oneSourceState = externalVoltageSourceStateByLowercaseName[oneSourceName];
+		oneSourceState.rampStartSimulatedTime = 0.0;
+		oneSourceState.valueBeforeMostRecentRamp = oneSourceState.valueAfterMostRecentRamp;
+	}
+	lastObservedSampleSimulationTimeSeconds = 0.0;
+	startContinuousChunkLoop();
+}
+
+function handleExternalVoltageMessage(incomingMessage) {
+	const externalSourceNameLowercase = String(incomingMessage.sourceName).toLowerCase();
+	const newTargetValueOfExternalSourceInVolts = Number(incomingMessage.volts);
+	let sourceState = externalVoltageSourceStateByLowercaseName[externalSourceNameLowercase];
+	if (sourceState === undefined) {
+		sourceState = {
+			valueBeforeMostRecentRamp: 0,
+			valueAfterMostRecentRamp: 0,
+			rampStartSimulatedTime: 0,
+		};
+		externalVoltageSourceStateByLowercaseName[externalSourceNameLowercase] = sourceState;
+	}
+	sourceState.valueBeforeMostRecentRamp = sourceState.valueAfterMostRecentRamp;
+	sourceState.valueAfterMostRecentRamp = newTargetValueOfExternalSourceInVolts;
+	sourceState.rampStartSimulatedTime = lastObservedSampleSimulationTimeSeconds;
 }
 
 function handleInstallFileTextMessage(incomingMessage) {
@@ -243,19 +342,8 @@ function handleInstallFileTextMessage(incomingMessage) {
 }
 
 function handleHaltMessage() {
+	chunkLoopShouldKeepRunning = false;
 	postRunningStateChangedMessage(false);
-}
-
-function handleExternalVoltageMessage(incomingMessage) {
-	const externalSourceNameLowercase = String(incomingMessage.sourceName).toLowerCase();
-	const newTargetValueOfExternalSourceInVolts = Number(incomingMessage.volts);
-	let sourceState = externalVoltageSourceStateByLowercaseName[externalSourceNameLowercase];
-	if (sourceState === undefined) {
-		sourceState = { valueBeforeStep: 0, valueAfterStep: 0 };
-		externalVoltageSourceStateByLowercaseName[externalSourceNameLowercase] = sourceState;
-	}
-	sourceState.valueAfterStep = newTargetValueOfExternalSourceInVolts;
-	runEventDrivenShortTransientFromInitialConditionsBlocking();
 }
 
 self.addEventListener('message', function handleHostMessage(messageEvent) {
@@ -265,11 +353,11 @@ self.addEventListener('message', function handleHostMessage(messageEvent) {
 		return;
 	}
 	switch (incomingMessage.messageKind) {
-		case 'loadNetlist':         handleLoadNetlistMessage(incomingMessage); break;
-		case 'startTransient':      handleStartTransientMessage(incomingMessage); break;
-		case 'halt':                handleHaltMessage(); break;
-		case 'externalVoltage':     handleExternalVoltageMessage(incomingMessage); break;
-		case 'installFileText':     handleInstallFileTextMessage(incomingMessage); break;
+		case 'loadNetlist':     handleLoadNetlistMessage(incomingMessage); break;
+		case 'setTimeWarp':     handleSetTimeWarpMessage(incomingMessage); break;
+		case 'externalVoltage': handleExternalVoltageMessage(incomingMessage); break;
+		case 'installFileText': handleInstallFileTextMessage(incomingMessage); break;
+		case 'halt':            handleHaltMessage(); break;
 		default:
 			postWorkerErrorMessage('unknown messageKind: ' + incomingMessage.messageKind);
 	}

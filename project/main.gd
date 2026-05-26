@@ -109,9 +109,8 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 			SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
 			SiPrefixTime.format_seconds_with_si_prefix(compute_transient_timestep_seconds_for_current_time_warp())])
 	if spice3d_root_node_for_sample_polling != null:
-		spice3d_root_node_for_sample_polling.start_transient_analysis_on_web_simulator(
-				compute_transient_timestep_seconds_for_current_time_warp(),
-				TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)
+		spice3d_root_node_for_sample_polling.update_time_warp_timestep_on_web_simulator(
+				compute_transient_timestep_seconds_for_current_time_warp())
 
 
 func parse_time_warp_input_text_to_simulated_seconds_per_real_second(input_text: String) -> float:
@@ -144,34 +143,15 @@ func format_simulated_seconds_per_real_second_as_input_text(seconds_value: float
 
 
 func compute_transient_timestep_seconds_for_current_time_warp() -> float:
-	# Pick the smaller of "user-requested sim per wall second" and "fixed tran
-	# stop window", then divide by the nominal playback rate. This guarantees:
-	# - At fast T (T >= STOP): timestep = STOP / N — ~N samples per tran, played
-	#   back at high wall-clock rate (animation looks instant).
-	# - At slow T (T < STOP): timestep = T / N — ~N * STOP/T samples per tran,
-	#   played back at N samples per wall second (smooth slow-motion).
-	# Both cases land on a steady ~N samples per wall second of playback.
-	var smaller_of_stop_and_warp_seconds := minf(
-			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS,
-			currently_selected_time_warp_simulated_seconds_per_real_second)
-	return (smaller_of_stop_and_warp_seconds
+	return (currently_selected_time_warp_simulated_seconds_per_real_second
 			/ TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK)
 
 
 func compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp() -> float:
-	return (compute_transient_timestep_seconds_for_current_time_warp()
-			/ currently_selected_time_warp_simulated_seconds_per_real_second)
+	return 1.0 / float(TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK)
 
 
 const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
-
-# `tran` window per click. Must exceed the longest propagation delay in
-# the loaded circuit so the final samples reach the post-transition steady
-# state. 2 ns covers ~60 stacked sky130 inv_1 stages (each ~30 ps tpd); for
-# deeper logic chains, increase this. Future work: replace the constant
-# with an auto-extending tran (re-run with `cont` until d/dt of all wire
-# voltages drops below a threshold) instead of guessing a window up front.
-const TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS := 2.0e-9
 const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
 
 # How much simulated time advances per second of wall clock — user-controlled
@@ -217,17 +197,6 @@ var loaded_schematic_pending_ready_transition_on_first_sample: Dictionary = {}
 var spice3d_root_node_pending_ready_transition_on_first_sample: Node = null
 var is_simulator_ready_to_accept_button_clicks: bool = false
 
-# Per-click animation accounting. Reset on every button click and on the
-# initial transient at startup. The summary log prints when the playback
-# queue first goes back to empty after the click, telling us exactly how
-# many samples reached the wires and over how much wall time — so we can
-# spot worker-side sample drops by comparing to the ngspice
-# `No. of Data Rows : N` line the diagnostic forwarder also prints.
-var per_click_diagnostic_animation_total_samples_played_back_since_last_click: int = 0
-var per_click_diagnostic_animation_wall_clock_seconds_at_last_click: float = 0.0
-var per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty: bool = false
-
-
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	if not is_simulator_ready_to_accept_button_clicks:
 		print("[spice3d] button '%s' click ignored — simulator is still loading" % button_instance_name)
@@ -236,44 +205,10 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	var new_high_state := not previously_high_state
 	pressed_button_high_state_by_instance_name[button_instance_name] = new_high_state
 	print("[spice3d] button '%s' toggled %s" % [button_instance_name, "HIGH" if new_high_state else "LOW"])
-	queued_samples_awaiting_playback_to_wires.clear()
-	reset_per_click_animation_diagnostic_counters_for_a_new_click(
-			"button '%s' toggled %s" % [
-				button_instance_name, "HIGH" if new_high_state else "LOW"])
 	if spice3d_root_node_for_sample_polling != null:
 		var new_voltage_for_button := VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL if new_high_state else 0.0
 		spice3d_root_node_for_sample_polling.set_external_voltage_source_on_web_simulator(
 				button_instance_name, new_voltage_for_button)
-
-
-func reset_per_click_animation_diagnostic_counters_for_a_new_click(human_event_description: String) -> void:
-	per_click_diagnostic_animation_total_samples_played_back_since_last_click = 0
-	per_click_diagnostic_animation_wall_clock_seconds_at_last_click = Time.get_ticks_msec() / 1000.0
-	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = true
-	print("[spice3d] click-anim-begin: %s (T=%s sim-time per real-second, timestep=%s)" % [
-		human_event_description,
-		SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
-		SiPrefixTime.format_seconds_with_si_prefix(compute_transient_timestep_seconds_for_current_time_warp())])
-
-
-func log_per_click_animation_summary_if_pending() -> void:
-	if not per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty:
-		return
-	if per_click_diagnostic_animation_total_samples_played_back_since_last_click == 0:
-		return
-	var current_wall_clock_seconds := Time.get_ticks_msec() / 1000.0
-	var animation_wall_clock_duration_seconds: float = (current_wall_clock_seconds
-			- per_click_diagnostic_animation_wall_clock_seconds_at_last_click)
-	var expected_wall_clock_duration_seconds: float = (
-			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS
-			/ currently_selected_time_warp_simulated_seconds_per_real_second)
-	print("[spice3d] click-anim-end: %d sample(s) played back over %s wall (expected ~%s at T=%s sim-time per real-second with %s tran-window)" % [
-		per_click_diagnostic_animation_total_samples_played_back_since_last_click,
-		SiPrefixTime.format_seconds_with_si_prefix(animation_wall_clock_duration_seconds),
-		SiPrefixTime.format_seconds_with_si_prefix(expected_wall_clock_duration_seconds),
-		SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
-		SiPrefixTime.format_seconds_with_si_prefix(TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)])
-	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = false
 
 
 func stage_sky130_pdk_files_into_web_simulator_filesystem(
@@ -403,6 +338,61 @@ func extract_output_net_name_from_xschem_pininfo_comment_or_empty(spice_netlist_
 	return after_directive_prefix.substr(0, colon_position).strip_edges()
 
 
+const POWER_RAIL_NAMES_NEVER_TREATED_AS_INTERNAL_NETS := {
+	"vpwr": true, "vgnd": true, "vpb": true, "vnb": true,
+	"0": true, "gnd": true, "vss": true, "vdd": true,
+}
+
+
+func looks_like_an_xschem_component_instance_line(stripped_lowercase_line: String) -> bool:
+	if stripped_lowercase_line.is_empty():
+		return false
+	var first_character := stripped_lowercase_line.unicode_at(0)
+	return first_character in [
+		"v".unicode_at(0), "x".unicode_at(0), "m".unicode_at(0),
+		"r".unicode_at(0), "c".unicode_at(0), "l".unicode_at(0),
+		"i".unicode_at(0), "d".unicode_at(0), "q".unicode_at(0),
+	]
+
+
+func token_looks_like_a_net_name_candidate(one_token: String) -> bool:
+	if one_token.is_empty():
+		return false
+	if one_token.contains("="):
+		return false
+	if one_token.begins_with("sky130_"):
+		return false
+	if one_token == "external":
+		return false
+	if one_token.is_valid_float():
+		return false
+	if POWER_RAIL_NAMES_NEVER_TREATED_AS_INTERNAL_NETS.has(one_token):
+		return false
+	return true
+
+
+func extract_internal_net_names_from_xschem_subckt_netlist(
+		raw_xschem_netlist_lines: PackedStringArray) -> PackedStringArray:
+	var distinct_net_names_seen_so_far := {}
+	var ordered_internal_net_names := PackedStringArray()
+	for one_xschem_line in raw_xschem_netlist_lines:
+		var stripped_lowercase_line := one_xschem_line.strip_edges().to_lower()
+		if not looks_like_an_xschem_component_instance_line(stripped_lowercase_line):
+			continue
+		var tokens_on_this_line := stripped_lowercase_line.split(" ", false)
+		if tokens_on_this_line.size() <= 1:
+			continue
+		for one_token_index in range(1, tokens_on_this_line.size()):
+			var one_token: String = tokens_on_this_line[one_token_index]
+			if not token_looks_like_a_net_name_candidate(one_token):
+				continue
+			if distinct_net_names_seen_so_far.has(one_token):
+				continue
+			distinct_net_names_seen_so_far[one_token] = true
+			ordered_internal_net_names.append(one_token)
+	return ordered_internal_net_names
+
+
 func convert_xschem_subckt_netlist_into_top_level_testbench(
 		raw_xschem_netlist_lines: PackedStringArray) -> PackedStringArray:
 	var top_level_testbench_lines := PackedStringArray()
@@ -456,20 +446,21 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-F: SI-prefix log notation + throttle removed (timer-paced)")
-	print("[spice3d] generated netlist with %d lines (after PDK include: %d)" % [
-			netlist_lines.size(), netlist_lines_with_pdk_include.size()])
+	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
+	print("[spice3d] BUILD-MARKER 2026-05-26-G: continuous step-N tran + T-change snapshot+reload")
+	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
+			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
+			internal_net_names_to_seed_at_half_vdd.size()])
 	print("[spice3d] ----- full testbench netlist sent to ngspice -----")
 	for one_testbench_line_index in netlist_lines_with_pdk_include.size():
 		print("[spice3d]   %02d | %s" % [
 			one_testbench_line_index,
 			netlist_lines_with_pdk_include[one_testbench_line_index]])
 	print("[spice3d] ----- end testbench netlist -----")
-	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines_with_pdk_include)
-	reset_per_click_animation_diagnostic_counters_for_a_new_click("initial transient on page load")
-	spice3d_root_node.start_transient_analysis_on_web_simulator(
+	spice3d_root_node.push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
+			netlist_lines_with_pdk_include,
 			compute_transient_timestep_seconds_for_current_time_warp(),
-			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)
+			internal_net_names_to_seed_at_half_vdd)
 
 
 func _process(delta_seconds_since_last_frame: float) -> void:
@@ -494,12 +485,10 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 		return
 	wall_clock_seconds_accumulated_since_last_playback_step = 0.0
 	if queued_samples_awaiting_playback_to_wires.is_empty():
-		log_per_click_animation_summary_if_pending()
 		return
 	var next_sample_to_play_back = queued_samples_awaiting_playback_to_wires.pop_front()
 	if not (next_sample_to_play_back is Dictionary) or not next_sample_to_play_back.has("nodeVoltagesByName"):
 		return
-	per_click_diagnostic_animation_total_samples_played_back_since_last_click += 1
 	var node_voltages_by_name: Dictionary = next_sample_to_play_back["nodeVoltagesByName"]
 	if not has_logged_first_simulation_sample_node_names:
 		print("[spice3d] first sample node names: %s" % str(node_voltages_by_name.keys()))
