@@ -273,6 +273,27 @@ function buildSnapshotInitialConditionLinesFromLastObservedSample() {
 	return snapshotInitialConditionLines;
 }
 
+// When the user changes the time-warp before the worker has had time to emit
+// any samples (e.g. they immediately type "10 ns" right after page load),
+// lastObservedNodeVoltagesByName is empty, the snapshot has nothing to inject,
+// the new tran starts from a fresh DC OP, and for a ring-oscillator that DC
+// OP lands at the metastable vdd/2 equilibrium where every inverter holds
+// its input at exactly the switching threshold. With bypass=1 the BSIM4
+// model evaluations are skipped for non-changing transistors, so the metastable
+// equilibrium is numerically stable and the RO just sits there. The fix: when
+// we'd otherwise have no snapshot voltages, fall back to the same alternating
+// high/low seed that the initial netlist load uses — that's what kicked the
+// RO into oscillation on first load in the first place.
+function buildEffectiveInitialConditionLinesPreferringSnapshotElseFallingBackToAlternatingSeed() {
+	const snapshotInitialConditionLines = buildSnapshotInitialConditionLinesFromLastObservedSample();
+	if (snapshotInitialConditionLines.length > 0) {
+		return snapshotInitialConditionLines;
+	}
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'snapshot is empty (no samples observed yet); falling back to alternating IC seed');
+	return buildSeedInitialConditionLinesForInternalNets();
+}
+
 function buildDeckLinesWithInitialConditionsAndTransientAnalysis(initialConditionLines, useInitialConditionsFlag) {
 	const tranTrailingUicSuffix = useInitialConditionsFlag ? ' uic' : '';
 	const tranLine = '.tran ' + currentTransientTimestepInSeconds
@@ -436,9 +457,9 @@ function handleSetTimeWarpMessage(incomingMessage) {
 	}
 	chunkLoopShouldKeepRunning = false;
 	currentTransientTimestepInSeconds = requestedTimestepSeconds;
-	const snapshotInitialConditionLines = buildSnapshotInitialConditionLinesFromLastObservedSample();
-	const useInitialConditionsFlag = snapshotInitialConditionLines.length > 0;
-	loadAssembledDeckIntoNgspiceAndPrimeForChunking(snapshotInitialConditionLines, useInitialConditionsFlag);
+	const effectiveInitialConditionLines = buildEffectiveInitialConditionLinesPreferringSnapshotElseFallingBackToAlternatingSeed();
+	const useInitialConditionsFlag = effectiveInitialConditionLines.length > 0;
+	loadAssembledDeckIntoNgspiceAndPrimeForChunking(effectiveInitialConditionLines, useInitialConditionsFlag);
 	for (const oneSourceName of Object.keys(externalVoltageSourceStateByLowercaseName)) {
 		const oneSourceState = externalVoltageSourceStateByLowercaseName[oneSourceName];
 		oneSourceState.rampStartSimulatedTime = 0.0;

@@ -174,6 +174,11 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 
 func parse_time_warp_input_text_to_simulated_seconds_per_real_second(input_text: String) -> float:
 	var trimmed_lowercase_text := input_text.strip_edges().to_lower().replace("µ", "u")
+	# Bare "0" / "0.0" with no unit suffix is the pause sentinel — multiplying
+	# any unit by zero produces zero, so the unit is irrelevant for this case
+	# and forcing the user to type "0 ps" specifically would be annoying.
+	if trimmed_lowercase_text.is_valid_float() and trimmed_lowercase_text.to_float() == 0.0:
+		return 0.0
 	var unit_multiplier_in_seconds := 0.0
 	if trimmed_lowercase_text.ends_with("ps"):
 		unit_multiplier_in_seconds = 1.0e-12
@@ -550,7 +555,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-V: T=0 paused; suppress per-step-N stderr noise")
+	print("[spice3d] BUILD-MARKER 2026-05-26-W: bare '0' parses as pause; fallback IC seed on T-change")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
