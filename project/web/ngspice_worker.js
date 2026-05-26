@@ -34,7 +34,8 @@ const WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS =
 		/ TARGET_NUMBER_OF_SAMPLES_PLAYED_BACK_PER_WALL_SECOND;
 const EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS = 5e-12;
 const SIMULATION_TSTOP_FAR_BEYOND_ANY_SESSION_SECONDS = 1.0e-3;
-const INITIAL_CONDITION_SEED_VOLTAGE_VOLTS = 0.9;
+const INITIAL_CONDITION_SEED_HIGH_VOLTS = 1.8;
+const INITIAL_CONDITION_SEED_LOW_VOLTS = 0.0;
 
 let ngspiceWebAssemblyModule = null;
 let ngspiceSendCommand = null;
@@ -139,6 +140,7 @@ function registerSharedspiceCallbacksWithNgspice() {
 				const sample = readVecValuesAllStructIntoSample(allVectorValuesPointer);
 				lastObservedSampleSimulationTimeSeconds = sample.simulationTimeSeconds;
 				lastObservedNodeVoltagesByName = sample.nodeVoltagesByName;
+				totalSampleCountObservedSinceLastDeckLoad += 1;
 				postSimulationSampleMessage(sample.simulationTimeSeconds, sample.orderedNodeVoltages);
 				return 0;
 			},
@@ -206,16 +208,31 @@ function provideFakeProcMeminfoSoNgspiceDoesNotAbort() {
 }
 
 function feedDeckLinesIntoNgspiceViaCircByline(deckLines) {
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'feeding ' + deckLines.length + ' deck lines via circbyline');
 	for (const oneLine of deckLines) {
-		ngspiceSendCommand('circbyline ' + String(oneLine));
+		const returnCode = ngspiceSendCommand('circbyline ' + String(oneLine));
+		if (returnCode !== 0) {
+			postNgspiceDiagnosticMessage('WorkerDiag',
+					'circbyline returned nonzero (' + returnCode + ') for line: ' + String(oneLine));
+		}
 	}
+	postNgspiceDiagnosticMessage('WorkerDiag', 'finished feeding deck');
 }
 
 function buildSeedInitialConditionLinesForInternalNets() {
+	// Alternate seed voltages around the ring so an odd-stage ring oscillator
+	// breaks symmetry on the very first solver step instead of sitting at the
+	// metastable vdd/2 equilibrium. Combinational circuits with external
+	// sources will have those external sources override the seed anyway.
 	const seedInitialConditionLines = [];
-	for (const oneInternalNetName of internalNetNamesEligibleForInitialConditionSeed) {
+	for (let oneNetIndex = 0; oneNetIndex < internalNetNamesEligibleForInitialConditionSeed.length; ++oneNetIndex) {
+		const oneInternalNetName = internalNetNamesEligibleForInitialConditionSeed[oneNetIndex];
+		const seedVoltageForThisNet = (oneNetIndex % 2 === 0)
+				? INITIAL_CONDITION_SEED_HIGH_VOLTS
+				: INITIAL_CONDITION_SEED_LOW_VOLTS;
 		seedInitialConditionLines.push(
-				'.ic v(' + oneInternalNetName + ')=' + INITIAL_CONDITION_SEED_VOLTAGE_VOLTS);
+				'.ic v(' + oneInternalNetName + ')=' + seedVoltageForThisNet);
 	}
 	return seedInitialConditionLines;
 }
@@ -254,23 +271,53 @@ function buildDeckLinesWithInitialConditionsAndTransientAnalysis(initialConditio
 function loadAssembledDeckIntoNgspiceAndPrimeForChunking(initialConditionLines, useInitialConditionsFlag) {
 	const fullyAssembledDeckLines = buildDeckLinesWithInitialConditionsAndTransientAnalysis(
 			initialConditionLines, useInitialConditionsFlag);
+	postNgspiceDiagnosticMessage('WorkerDiag', '--- assembled deck (' + fullyAssembledDeckLines.length + ' lines) ---');
+	for (const oneDeckLine of fullyAssembledDeckLines) {
+		postNgspiceDiagnosticMessage('WorkerDiag', '  | ' + String(oneDeckLine));
+	}
+	postNgspiceDiagnosticMessage('WorkerDiag', '--- end assembled deck ---');
 	feedDeckLinesIntoNgspiceViaCircByline(fullyAssembledDeckLines);
 	ngspiceSendCommand('save none');
 }
+
+let totalChunkCountSinceLastDeckLoad = 0;
+let totalSampleCountObservedSinceLastDeckLoad = 0;
 
 function runOneStepNChunkAndYield() {
 	if (!chunkLoopShouldKeepRunning) {
 		postRunningStateChangedMessage(false);
 		return;
 	}
+	const sampleCountBeforeThisChunk = totalSampleCountObservedSinceLastDeckLoad;
+	const wallClockMillisecondsBeforeStep = (typeof performance !== 'undefined' && performance.now)
+			? performance.now() : Date.now();
+	if (totalChunkCountSinceLastDeckLoad === 0) {
+		postNgspiceDiagnosticMessage('WorkerDiag', 'first chunk: about to call step '
+				+ NUMBER_OF_SAMPLES_PER_CHUNK_BETWEEN_SET_TIMEOUT_YIELDS);
+	}
 	ngspiceSendCommand('step ' + NUMBER_OF_SAMPLES_PER_CHUNK_BETWEEN_SET_TIMEOUT_YIELDS);
+	const wallClockMillisecondsAfterStep = (typeof performance !== 'undefined' && performance.now)
+			? performance.now() : Date.now();
+	const samplesEmittedThisChunk = totalSampleCountObservedSinceLastDeckLoad - sampleCountBeforeThisChunk;
+	const wallClockMillisecondsThisChunk = wallClockMillisecondsAfterStep - wallClockMillisecondsBeforeStep;
+	totalChunkCountSinceLastDeckLoad += 1;
+	if (totalChunkCountSinceLastDeckLoad <= 3 || samplesEmittedThisChunk === 0) {
+		postNgspiceDiagnosticMessage('WorkerDiag',
+				'chunk ' + totalChunkCountSinceLastDeckLoad + ': emitted '
+				+ samplesEmittedThisChunk + ' sample(s) in '
+				+ wallClockMillisecondsThisChunk.toFixed(1) + ' ms (total samples: '
+				+ totalSampleCountObservedSinceLastDeckLoad + ')');
+	}
 	setTimeout(runOneStepNChunkAndYield, WALL_CLOCK_MILLISECONDS_BETWEEN_CONSECUTIVE_CHUNKS);
 }
 
 function startContinuousChunkLoop() {
 	if (chunkLoopShouldKeepRunning) return;
+	totalChunkCountSinceLastDeckLoad = 0;
+	totalSampleCountObservedSinceLastDeckLoad = 0;
 	chunkLoopShouldKeepRunning = true;
 	postRunningStateChangedMessage(true);
+	postNgspiceDiagnosticMessage('WorkerDiag', 'starting continuous chunk loop');
 	setTimeout(runOneStepNChunkAndYield, 0);
 }
 

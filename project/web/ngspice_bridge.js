@@ -19,7 +19,8 @@
 				return true;
 			}
 			try {
-				this.ngspiceWorker = new Worker('ngspice_worker.js');
+				const cacheBustQueryParameter = '?v=' + Date.now();
+				this.ngspiceWorker = new Worker('ngspice_worker.js' + cacheBustQueryParameter);
 			} catch (workerConstructionError) {
 				console.error('[spice3d] failed to construct ngspice worker', workerConstructionError);
 				this.ngspiceWorker = null;

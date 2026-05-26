@@ -63,15 +63,20 @@ echo "[serve-local] copying ngspice wasm artifacts into export"
 cp "$ngspice_wasm_build_directory/ngspice.js" "$exported_web_build_directory/"
 cp "$ngspice_wasm_build_directory/ngspice.wasm" "$exported_web_build_directory/"
 
-echo "[serve-local] injecting ngspice_bridge.js <script> tag into index.html"
+echo "[serve-local] injecting cache-busted ngspice_bridge.js <script> tag into index.html"
+build_export_timestamp="$(date +%s)" \
 exported_web_build_directory_for_injection="$exported_web_build_directory" python3 - <<'PY'
-import os
+import os, re
 from pathlib import Path
 exported_index_html_path = Path(os.environ['exported_web_build_directory_for_injection']) / 'index.html'
 exported_html = exported_index_html_path.read_text()
-ngspice_bridge_script_tag = '<script src="ngspice_bridge.js"></script>'
-if ngspice_bridge_script_tag in exported_html:
-    print('  already present')
+build_export_timestamp = os.environ['build_export_timestamp']
+ngspice_bridge_script_tag = '<script src="ngspice_bridge.js?v=' + build_export_timestamp + '"></script>'
+already_injected_pattern = re.compile(r'<script src="ngspice_bridge\.js[^"]*"></script>')
+if already_injected_pattern.search(exported_html):
+    new_html = already_injected_pattern.sub(ngspice_bridge_script_tag, exported_html, count=1)
+    exported_index_html_path.write_text(new_html)
+    print('  refreshed cache-bust query string')
 else:
     exported_index_html_path.write_text(
         exported_html.replace('<head>', '<head>\n\t' + ngspice_bridge_script_tag, 1))
