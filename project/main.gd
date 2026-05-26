@@ -186,7 +186,16 @@ const TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND := 100.0e-12
 const STATUS_BACKGROUND_COLOR_WHILE_SIMULATOR_LOADING := Color(0.65, 0.3, 0.0, 0.75)
 const STATUS_BACKGROUND_COLOR_AFTER_SIMULATOR_READY := Color(0.0, 0.0, 0.0, 0.55)
 const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.0
-const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 10000.0
+# Effectively unthrottled. The throttle (worker-side) was useful when a single
+# long bg_run was producing samples continuously and we wanted to bound the
+# postMessage rate to ~30 Hz for the wires. Under the current event-driven
+# model each `tran` produces a bounded burst of samples synchronously inside
+# `run`, and we WANT all of them so the playback queue can pace them out at
+# the user's chosen time warp. At T=1 ps and tmax=33 fs ngspice emits ~6000
+# samples per click in a wall-time burst of ~60 ms; the old 10 kHz throttle
+# was dropping ~99% of them, compressing the wall-time animation to ~3 s
+# instead of the math's ~200 s.
+const SIMULATION_SAMPLE_FORWARD_RATE_HZ := 1.0e9
 const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 3
 const MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC := 0.2
 
@@ -215,6 +224,16 @@ var loaded_schematic_pending_ready_transition_on_first_sample: Dictionary = {}
 var spice3d_root_node_pending_ready_transition_on_first_sample: Node = null
 var is_simulator_ready_to_accept_button_clicks: bool = false
 
+# Per-click animation accounting. Reset on every button click and on the
+# initial transient at startup. The summary log prints when the playback
+# queue first goes back to empty after the click, telling us exactly how
+# many samples reached the wires and over how much wall time — so we can
+# spot worker-side sample drops by comparing to the ngspice
+# `No. of Data Rows : N` line the diagnostic forwarder also prints.
+var per_click_diagnostic_animation_total_samples_played_back_since_last_click: int = 0
+var per_click_diagnostic_animation_wall_clock_seconds_at_last_click: float = 0.0
+var per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty: bool = false
+
 
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	if not is_simulator_ready_to_accept_button_clicks:
@@ -225,10 +244,43 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	pressed_button_high_state_by_instance_name[button_instance_name] = new_high_state
 	print("[spice3d] button '%s' toggled %s" % [button_instance_name, "HIGH" if new_high_state else "LOW"])
 	queued_samples_awaiting_playback_to_wires.clear()
+	reset_per_click_animation_diagnostic_counters_for_a_new_click(
+			"button '%s' toggled %s" % [
+				button_instance_name, "HIGH" if new_high_state else "LOW"])
 	if spice3d_root_node_for_sample_polling != null:
 		var new_voltage_for_button := VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL if new_high_state else 0.0
 		spice3d_root_node_for_sample_polling.set_external_voltage_source_on_web_simulator(
 				button_instance_name, new_voltage_for_button)
+
+
+func reset_per_click_animation_diagnostic_counters_for_a_new_click(human_event_description: String) -> void:
+	per_click_diagnostic_animation_total_samples_played_back_since_last_click = 0
+	per_click_diagnostic_animation_wall_clock_seconds_at_last_click = Time.get_ticks_msec() / 1000.0
+	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = true
+	print("[spice3d] click-anim-begin: %s (T=%s sim-s/real-s, timestep=%s s)" % [
+		human_event_description,
+		str(currently_selected_time_warp_simulated_seconds_per_real_second),
+		str(compute_transient_timestep_seconds_for_current_time_warp())])
+
+
+func log_per_click_animation_summary_if_pending() -> void:
+	if not per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty:
+		return
+	if per_click_diagnostic_animation_total_samples_played_back_since_last_click == 0:
+		return
+	var current_wall_clock_seconds := Time.get_ticks_msec() / 1000.0
+	var animation_wall_clock_duration_seconds: float = (current_wall_clock_seconds
+			- per_click_diagnostic_animation_wall_clock_seconds_at_last_click)
+	var expected_wall_clock_duration_seconds: float = (
+			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS
+			/ currently_selected_time_warp_simulated_seconds_per_real_second)
+	print("[spice3d] click-anim-end: %d sample(s) played back over %.2fs wall (expected ~%.2fs at T=%s sim-s/real-s with %s stop)" % [
+		per_click_diagnostic_animation_total_samples_played_back_since_last_click,
+		animation_wall_clock_duration_seconds,
+		expected_wall_clock_duration_seconds,
+		str(currently_selected_time_warp_simulated_seconds_per_real_second),
+		str(TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)])
+	per_click_diagnostic_animation_has_a_pending_summary_to_log_on_queue_empty = false
 
 
 func stage_sky130_pdk_files_into_web_simulator_filesystem(
@@ -411,7 +463,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-B: FO4 cap before .end")
+	print("[spice3d] BUILD-MARKER 2026-05-26-D: throttle bypassed above Firefox's perf.now() floor")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size()])
 	print("[spice3d] ----- full testbench netlist sent to ngspice -----")
@@ -422,6 +474,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	print("[spice3d] ----- end testbench netlist -----")
 	spice3d_root_node.set_simulation_sample_throttle_on_web_simulator(SIMULATION_SAMPLE_FORWARD_RATE_HZ)
 	spice3d_root_node.push_netlist_lines_to_web_simulator(netlist_lines_with_pdk_include)
+	reset_per_click_animation_diagnostic_counters_for_a_new_click("initial transient on page load")
 	spice3d_root_node.start_transient_analysis_on_web_simulator(
 			compute_transient_timestep_seconds_for_current_time_warp(),
 			TIME_WARP_TRANSIENT_STOP_PER_EVENT_DRIVEN_SECONDS)
@@ -449,10 +502,12 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(
 		return
 	wall_clock_seconds_accumulated_since_last_playback_step = 0.0
 	if queued_samples_awaiting_playback_to_wires.is_empty():
+		log_per_click_animation_summary_if_pending()
 		return
 	var next_sample_to_play_back = queued_samples_awaiting_playback_to_wires.pop_front()
 	if not (next_sample_to_play_back is Dictionary) or not next_sample_to_play_back.has("nodeVoltagesByName"):
 		return
+	per_click_diagnostic_animation_total_samples_played_back_since_last_click += 1
 	var node_voltages_by_name: Dictionary = next_sample_to_play_back["nodeVoltagesByName"]
 	if not has_logged_first_simulation_sample_node_names:
 		print("[spice3d] first sample node names: %s" % str(node_voltages_by_name.keys()))

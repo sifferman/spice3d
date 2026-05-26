@@ -106,12 +106,19 @@ function registerSharedspiceCallbacksWithNgspice() {
 			'iiiiii');
 	const sendDataCallbackFunctionPointer = ngspiceWebAssemblyModule.addFunction(
 			function publishSimulationSample(allVectorValuesPointer, vectorCount, libraryInstanceId, userDataPointer) {
-				const currentWallClockMilliseconds = (typeof performance !== 'undefined' && performance.now)
-						? performance.now()
-						: Date.now();
-				const millisecondsSinceLastForward = currentWallClockMilliseconds - wallClockMillisecondsAtLastForwardedSample;
-				if (millisecondsSinceLastForward < minimumWallClockMillisecondsBetweenForwardedSamples) return 0;
-				wallClockMillisecondsAtLastForwardedSample = currentWallClockMilliseconds;
+				// `minimumWallClockMillisecondsBetweenForwardedSamples == 0` is the
+				// "unthrottled" sentinel — forward every sample regardless of wall
+				// time. The host (main.gd) puts the worker in this mode by sending
+				// a high enough rate via setSampleThrottle; see handleSetSampleThrottleMessage
+				// for the threshold above which we treat the rate as unthrottled.
+				if (minimumWallClockMillisecondsBetweenForwardedSamples > 0) {
+					const currentWallClockMilliseconds = (typeof performance !== 'undefined' && performance.now)
+							? performance.now()
+							: Date.now();
+					const millisecondsSinceLastForward = currentWallClockMilliseconds - wallClockMillisecondsAtLastForwardedSample;
+					if (millisecondsSinceLastForward < minimumWallClockMillisecondsBetweenForwardedSamples) return 0;
+					wallClockMillisecondsAtLastForwardedSample = currentWallClockMilliseconds;
+				}
 				const sample = readVecValuesAllStructIntoSample(allVectorValuesPointer);
 				postSimulationSampleMessage(sample.simulationTimeSeconds, sample.orderedNodeVoltages);
 				return 0;
@@ -253,6 +260,16 @@ function handleInstallFileTextMessage(incomingMessage) {
 function handleSetSampleThrottleMessage(incomingMessage) {
 	const requestedHz = Number(incomingMessage.maxSamplesPerSecond);
 	if (!isFinite(requestedHz) || requestedHz <= 0) return;
+	// Firefox limits `performance.now()` to ~1 ms resolution as a Spectre
+	// mitigation, so any rate above 1000 Hz hits that resolution floor and
+	// gets enforced as "at most one sample per millisecond" anyway —
+	// silently dropping everything else. Above 1000 Hz, switch to the
+	// unthrottled sentinel (0) so SendData forwards everything.
+	const FIREFOX_PERFORMANCE_NOW_RESOLUTION_FLOOR_HZ = 1000;
+	if (requestedHz >= FIREFOX_PERFORMANCE_NOW_RESOLUTION_FLOOR_HZ) {
+		minimumWallClockMillisecondsBetweenForwardedSamples = 0;
+		return;
+	}
 	minimumWallClockMillisecondsBetweenForwardedSamples = 1000 / requestedHz;
 }
 
