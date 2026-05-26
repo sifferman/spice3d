@@ -441,6 +441,25 @@ func extract_internal_net_names_from_xschem_subckt_netlist(
 	return ordered_internal_net_names
 
 
+func strip_empty_parameter_assignments_from_one_spice_line(spice_line: String) -> String:
+	# xschem2spice emits raw sky130_fd_pr device instances with blank-valued
+	# parameter tokens like `ad= as= pd= ps= nrd= nrs= sa= sb= sd=`. These are
+	# meant to be filled in by xschem's symbol-property templates, but for the
+	# sky130_fd_pr/nfet_01v8.sym and pfet_01v8_hvt.sym symbols the templates
+	# leave them empty when the schematic doesn't override the defaults. ngspice
+	# can't parse `ad=` (no value): it treats the next token as the assigned
+	# expression, chaining `ad=as=(pd=(ps=...))` until something undefined like
+	# `nrd` aborts the Formula() evaluator. Stripping the empty assignments
+	# lets the model fall back to its built-in BSIM4 defaults, which are fine
+	# for digital simulation.
+	var output_tokens := PackedStringArray()
+	for one_token in spice_line.split(" ", false):
+		if one_token.ends_with("="):
+			continue
+		output_tokens.append(one_token)
+	return " ".join(output_tokens)
+
+
 func convert_xschem_subckt_netlist_into_top_level_testbench(
 		raw_xschem_netlist_lines: PackedStringArray) -> PackedStringArray:
 	var top_level_testbench_lines := PackedStringArray()
@@ -466,7 +485,8 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 		if one_existing_line.strip_edges() == ".end":
 			raw_xschem_netlist_contained_a_dot_end_directive = true
 			continue
-		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(one_existing_line)
+		var without_empty_param_assignments := strip_empty_parameter_assignments_from_one_spice_line(one_existing_line)
+		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(without_empty_param_assignments)
 		top_level_testbench_lines.append(without_escape_backslashes)
 	for one_output_net_name in output_net_names_to_load_with_fo4_capacitor:
 		top_level_testbench_lines.append("C_SPICE3D_FO4_LOAD_%s %s VGND %s" % [
@@ -494,7 +514,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-K: cache-busted worker URL + diagnostics")
+	print("[spice3d] BUILD-MARKER 2026-05-26-L: strip empty xschem param assignments")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
