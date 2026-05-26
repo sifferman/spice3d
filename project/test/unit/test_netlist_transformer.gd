@@ -98,14 +98,12 @@ func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrappe
 			"Every xschem output net (those with `*.PININFO <name>:O`) must get a 7.4 fF FO4 load "
 			+ "to VGND in the testbench. Without it the inverter drives a floating node and switches "
 			+ "in sub-picoseconds — physically true but unintuitive in animation.")
-	var lines_equal_to_end_directive_count := 0
-	for one_line in converted_lines:
-		if one_line.strip_edges() == ".end":
-			lines_equal_to_end_directive_count += 1
-	assert_eq(lines_equal_to_end_directive_count, 0,
-			"`.end` must be stripped from the converted testbench — ngspice's netlist "
-			+ "parser stops at the first `.end`, so anything appended afterwards (like our "
-			+ "FO4 output-load caps) is silently ignored.")
+	# `.end` must survive in the testbench (ngspice needs it to finalize the
+	# netlist as a runnable circuit) but every FO4 output-load cap must come
+	# before it — ngspice's parser stops at the first `.end`, so any cap
+	# placed afterwards is silently dropped. Both invariants together caught
+	# two real bugs this session: stripping `.end` altogether ("no circuit
+	# loaded"), and appending caps after `.end` (sub-picosecond tpd).
 	var fo4_cap_line_position_in_testbench := -1
 	var dot_end_position_in_testbench := -1
 	for one_line_index in converted_lines.size():
@@ -115,7 +113,11 @@ func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrappe
 			dot_end_position_in_testbench = one_line_index
 	assert_true(fo4_cap_line_position_in_testbench >= 0,
 			"FO4 cap line must exist in the converted testbench.")
-	if dot_end_position_in_testbench >= 0:
-		assert_lt(dot_end_position_in_testbench, fo4_cap_line_position_in_testbench,
-				"If a `.end` directive somehow survives, the FO4 cap line must precede it so "
-				+ "ngspice actually parses the cap before halting at `.end`.")
+	assert_true(dot_end_position_in_testbench >= 0,
+			"`.end` directive must survive into the converted testbench — ngspice needs "
+			+ "it to finalize the netlist before `run`; stripping it produces 'no circuit loaded'.")
+	assert_lt(fo4_cap_line_position_in_testbench, dot_end_position_in_testbench,
+			"FO4 cap line must precede `.end` in the testbench. ngspice's netlist parser "
+			+ "stops at the first `.end`, so any cap appended afterwards is silently dropped — "
+			+ "exact symptom: inverter tpd collapses to sub-picoseconds because btn_out_n "
+			+ "ends up effectively unloaded again.")
