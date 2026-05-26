@@ -345,20 +345,50 @@ const SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH := [
 ]
 
 # Loosened solver tolerances for digital-only visualization. ngspice's
-# defaults (reltol=1e-3, abstol=1e-12 A, vntol=1e-6 V) are tuned for
-# analog-precise BJT/MOSFET DC operating points; for a circuit whose only
-# visible output is wire-color thresholding around vdd/2, we accept ~mV
-# voltage and ~10nA current errors in exchange for 2-3x fewer Newton
-# iterations per timestep through digital transitions. The wire-color
-# threshold lives at ~900 mV so mV-scale noise is invisible. trtol=50
-# (vs default 7) lets the transient-LTE controller use larger internal
-# steps when local truncation error is acceptable.
+# defaults are tuned for analog-precise BJT/MOSFET DC operating points;
+# for a circuit whose only visible output is wire-color thresholding
+# around vdd/2, we accept ~mV voltage and ~10nA current errors in
+# exchange for fewer Newton iterations per timestep and aggressively
+# skipped BSIM4 model evaluations for stable transistors. The wire-color
+# threshold lives at ~900 mV so mV-scale noise is invisible.
+#
+# Per option (with defaults in parentheses):
+#   reltol=1e-2 (1e-3)   - relative Newton convergence; 1% of any voltage
+#                          is below pixel-color resolution.
+#   abstol=1e-8 (1e-12)  - absolute current convergence; 10 nA vs sky130
+#                          mA-scale currents = 7 orders of magnitude below
+#                          anything visible.
+#   vntol=1e-3 (1e-6)    - absolute voltage convergence; 1 mV vs 1.8 V
+#                          swing = 0.05% (invisible to color threshold).
+#   chgtol=1e-12 (1e-14) - charge convergence on capacitive integration.
+#   trtol=50 (7)         - LTE overestimation factor; ngspice's transient
+#                          truncation-error estimator overshoots actual
+#                          error; raising trtol lets the integrator take
+#                          larger internal steps before bisecting.
+#   bypass=1 (0)         - in a 9-stage RO only 1-2 stages transition at
+#                          a time; bypass skips re-evaluating the other
+#                          7-8 BSIM4 models per Newton iteration. See
+#                          bsim4/b4ld.c:509-603 (the `#ifndef NOBYPASS`
+#                          path). Single biggest knob for this workload.
+#   gmin=1e-9 (1e-12)    - 1000x larger min-conductance for better-
+#                          conditioned MNA matrix; adds at most ~1 nA of
+#                          leakage to each node, invisible at this scale.
+#   itl4=200 (10)        - lets the solver iterate harder per timestep
+#                          instead of falling back to bisection (which is
+#                          more expensive when tolerances are loose).
+#   maxord=2 (6)         - cap BDF integration order at 2; matches what
+#                          most digital simulators use anyway and keeps
+#                          per-step matrix work simpler.
 const NGSPICE_DOT_OPTION_LINES_FOR_DIGITAL_VISUALIZATION_PRESET := [
 	".option reltol=1e-2",
 	".option abstol=1e-8",
 	".option vntol=1e-3",
 	".option chgtol=1e-12",
 	".option trtol=50",
+	".option bypass=1",
+	".option gmin=1e-9",
+	".option itl4=200",
+	".option maxord=2",
 ]
 
 
@@ -387,25 +417,6 @@ func is_subckt_wrapper_directive(spice_netlist_line: String) -> bool:
 	return false
 
 
-const SKY130_INV_4_PIN_INPUT_CAPACITANCE_IN_SPICE_LITERAL := "7.4f"
-
-
-func extract_output_net_names_from_xschem_pininfo_comment(spice_netlist_line: String) -> PackedStringArray:
-	var output_net_names := PackedStringArray()
-	var trimmed := spice_netlist_line.strip_edges()
-	const PININFO_DIRECTIVE_PREFIX := "*.PININFO"
-	if not trimmed.begins_with(PININFO_DIRECTIVE_PREFIX):
-		return output_net_names
-	var after_directive_prefix := trimmed.substr(PININFO_DIRECTIVE_PREFIX.length()).strip_edges()
-	for one_pin_direction_token in after_directive_prefix.split(" ", false):
-		var colon_position := one_pin_direction_token.find(":")
-		if colon_position <= 0:
-			continue
-		var direction_suffix := one_pin_direction_token.substr(colon_position + 1).strip_edges().to_upper()
-		if not direction_suffix.begins_with("O"):
-			continue
-		output_net_names.append(one_pin_direction_token.substr(0, colon_position).strip_edges())
-	return output_net_names
 
 
 const POWER_RAIL_NAMES_NEVER_TREATED_AS_INTERNAL_NETS := {
@@ -498,11 +509,8 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 			PackedStringArray(NGSPICE_DOT_OPTION_LINES_FOR_DIGITAL_VISUALIZATION_PRESET))
 	top_level_testbench_lines.append_array(
 			PackedStringArray(SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH))
-	var output_net_names_to_load_with_fo4_capacitor := PackedStringArray()
 	var raw_xschem_netlist_contained_a_dot_end_directive := false
 	for one_existing_line in raw_xschem_netlist_lines:
-		for one_output_net_name in extract_output_net_names_from_xschem_pininfo_comment(one_existing_line):
-			output_net_names_to_load_with_fo4_capacitor.append(one_output_net_name)
 		if is_subckt_wrapper_directive(one_existing_line):
 			continue
 		# Hold back `.end` so we can append FO4 output-load caps *before* it.
@@ -518,17 +526,8 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 			continue
 		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(without_empty_param_assignments)
 		top_level_testbench_lines.append(without_escape_backslashes)
-	for one_output_net_name in output_net_names_to_load_with_fo4_capacitor:
-		top_level_testbench_lines.append("C_SPICE3D_FO4_LOAD_%s %s VGND %s" % [
-			one_output_net_name,
-			one_output_net_name,
-			SKY130_INV_4_PIN_INPUT_CAPACITANCE_IN_SPICE_LITERAL])
 	if raw_xschem_netlist_contained_a_dot_end_directive:
 		top_level_testbench_lines.append(".end")
-	print("[spice3d] testbench loads %d output net(s) with %s FO4 caps: %s" % [
-		output_net_names_to_load_with_fo4_capacitor.size(),
-		SKY130_INV_4_PIN_INPUT_CAPACITANCE_IN_SPICE_LITERAL,
-		str(output_net_names_to_load_with_fo4_capacitor)])
 	return top_level_testbench_lines
 
 
@@ -544,7 +543,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-T: digital-visualization solver-tolerance preset")
+	print("[spice3d] BUILD-MARKER 2026-05-26-U: more solver-tolerance knobs; drop FO4 load caps")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
