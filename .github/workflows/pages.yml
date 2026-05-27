@@ -79,6 +79,21 @@ jobs:
         if: steps.cache_ngspice_emscripten_build.outputs.cache-hit != 'true'
         run: scripts/build-ngspice-for-emscripten.sh
 
+      - name: Verify ngspice wasm runs an RC transient correctly
+        run: node test/node/test-ngspice-wasm.js
+
+      - name: Verify ngspice wasm reacts to live `alter` commands
+        run: node test/node/test-ngspice-wasm-interactive.js
+
+      - name: Verify SendChar diagnostics reach the host
+        run: node test/node/test-ngspice-wasm-sendchar-surface.js
+
+      - name: Verify button-toggle end-to-end (skips without PDK_ROOT)
+        run: node test/node/test-ngspice-wasm-button-toggle-end-to-end.js
+
+      - name: Run host-C++ unit tests (schematic loader, streaming zstd-tar extractor)
+        run: make -C test run
+
       - name: Restore SCons cache (web)
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
@@ -142,7 +157,17 @@ jobs:
           set -euo pipefail
           cd project
           godot --headless --import || true
-          godot --headless --import
+          godot --headless --import 2>&1 | tee import_log.txt
+          if grep -E "(SCRIPT ERROR|Parse Error|Failed to load script)" import_log.txt; then
+            echo "Import surfaced GDScript parse/load errors — failing." >&2
+            exit 1
+          fi
+
+      - name: "Reject unsupported GDScript format specifiers (%e, %g)"
+        run: scripts/lint-gdscript-unsupported-format-specifiers.sh
+
+      - name: "Run GUT headless unit tests (strict; fails on any ERROR line)"
+        run: scripts/run-godot-tests-strict.sh
 
       - name: Web export
         run: |

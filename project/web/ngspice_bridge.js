@@ -19,7 +19,8 @@
 				return true;
 			}
 			try {
-				this.ngspiceWorker = new Worker('ngspice_worker.js');
+				const cacheBustQueryParameter = '?v=' + Date.now();
+				this.ngspiceWorker = new Worker('ngspice_worker.js' + cacheBustQueryParameter);
 			} catch (workerConstructionError) {
 				console.error('[spice3d] failed to construct ngspice worker', workerConstructionError);
 				this.ngspiceWorker = null;
@@ -34,24 +35,28 @@
 			return true;
 		},
 
-		loadNetlistLines: function loadNetlistLines(netlistLines) {
-			if (!this.ngspiceWorker) {
-				return false;
-			}
-			this.ngspiceWorker.postMessage({ messageKind: 'loadNetlist', netlistLines: netlistLines });
-			return true;
-		},
-
-		startTransientAnalysis: function startTransientAnalysis(timestepSeconds, stopTimeSeconds) {
+		loadNetlistLinesWithTimestepAndInternalNetsToSeed: function loadNetlistLinesWithTimestepAndInternalNetsToSeed(
+				netlistLines, timestepSeconds, internalNetNamesToSeedAtHalfVdd) {
 			if (!this.ngspiceWorker) {
 				return false;
 			}
 			this.ngspiceWorker.postMessage({
-				messageKind: 'startTransient',
+				messageKind: 'loadNetlist',
+				netlistLines: netlistLines,
 				timestepSeconds: timestepSeconds,
-				stopTimeSeconds: stopTimeSeconds,
+				internalNetNamesToSeedAtHalfVdd: internalNetNamesToSeedAtHalfVdd,
 			});
-			this.isSimulationRunning = true;
+			return true;
+		},
+
+		updateTimeWarpTimestep: function updateTimeWarpTimestep(timestepSeconds) {
+			if (!this.ngspiceWorker) {
+				return false;
+			}
+			this.ngspiceWorker.postMessage({
+				messageKind: 'setTimeWarp',
+				timestepSeconds: timestepSeconds,
+			});
 			return true;
 		},
 
@@ -74,10 +79,37 @@
 			}
 		},
 
+		installFileTextInWorkerFilesystem: function installFileTextInWorkerFilesystem(virtualPath, fileContent) {
+			if (!this.ngspiceWorker) return false;
+			this.ngspiceWorker.postMessage({
+				messageKind: 'installFileText',
+				virtualPath: String(virtualPath),
+				fileContent: String(fileContent),
+			});
+			return true;
+		},
+
 		takeBufferedSimulationSamples: function takeBufferedSimulationSamples() {
 			const drainedSamples = this.bufferedSimulationSamples;
 			this.bufferedSimulationSamples = [];
 			return drainedSamples;
+		},
+
+		decorateSampleWithNamedVoltages: function decorateSampleWithNamedVoltages(rawSample) {
+			if (!this.nodeNames || !rawSample || !Array.isArray(rawSample.nodeVoltages)) {
+				return rawSample;
+			}
+			const namedVoltagesBySpiceNodeName = Object.create(null);
+			for (let nodeIndex = 0; nodeIndex < this.nodeNames.length; ++nodeIndex) {
+				const nodeName = this.nodeNames[nodeIndex];
+				if (typeof nodeName === 'string') {
+					namedVoltagesBySpiceNodeName[nodeName.toLowerCase()] = rawSample.nodeVoltages[nodeIndex];
+				}
+			}
+			return {
+				simulationTimeSeconds: rawSample.simulationTimeSeconds,
+				nodeVoltagesByName: namedVoltagesBySpiceNodeName,
+			};
 		},
 
 		handleWorkerMessage: function handleWorkerMessage(workerMessage) {
@@ -110,13 +142,17 @@
 					this.nodeNames = workerMessage.nodeNames;
 					break;
 				case 'simulationSample':
-					this.bufferedSimulationSamples.push(workerMessage.sample);
+					this.bufferedSimulationSamples.push(this.decorateSampleWithNamedVoltages(workerMessage.sample));
 					break;
 				case 'runningStateChanged':
 					this.isSimulationRunning = Boolean(workerMessage.isSimulationRunning);
 					break;
 				case 'error':
 					console.error('[spice3d] ngspice worker reported error: ' + workerMessage.errorText);
+					break;
+				case 'ngspiceDiagnostic':
+					console.log('[ngspice/' + workerMessage.diagnosticOriginChannel + '] '
+							+ workerMessage.diagnosticText);
 					break;
 			}
 		},

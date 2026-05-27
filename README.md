@@ -5,9 +5,7 @@ Built on Godot (C++ GDExtension), [libngspice](https://ngspice.sourceforge.io/)
 compiled to WebAssembly, and [xschem](https://xschem.sourceforge.io/) for
 schematic input.
 
-The design document (concept, architecture, threading model, PDK strategy,
-roadmap) lives in [`../spice3d_notes/README.md`](../spice3d_notes/README.md).
-This README only documents how to build/run what's in *this* repository.
+This README documents how to build/run what's in *this* repository.
 
 ## Status
 
@@ -37,6 +35,43 @@ scons platform=web target=template_debug
 
 After building, the shared library is copied into `project/bin/<platform>/`
 and picked up automatically via `project/bin/spice3d.gdextension`.
+
+## Debug the web build locally
+
+The deployed GitHub Pages build can take several minutes to land
+(push → CI → deploy → hard-refresh in a browser that may have
+cached an old `index.wasm`). For the inner debugging loop where
+that latency hurts, re-export and serve the same artifacts from
+localhost:
+
+```bash
+scripts/serve-local-web-export.sh
+```
+
+Prerequisites — these are the same artifacts the CI build needs,
+just produced locally one time:
+
+1. `scripts/install-godot.sh` — downloads Godot 4.4.1-stable and
+   its export templates to `$HOME/godot` and
+   `~/.local/share/godot/export_templates/4.4.1.stable/`
+   (idempotent, skips downloads when files already exist). The
+   serve script auto-falls back to `$HOME/godot` when no `godot`
+   is on `PATH`; you can also point at a Godot install elsewhere
+   with `GODOT_EXECUTABLE_PATH=...`.
+2. `scripts/build-ngspice-for-emscripten.sh` — produces
+   `third_party/ngspice/build-emscripten/ngspice.{js,wasm}`
+   (needs Emscripten on `PATH`).
+3. `scons -j"$(nproc)" target=template_release platform=web arch=wasm32 precision=single threads=no`
+   — produces the web template-release GDExtension wasm at
+   `project/bin/web/libspice3d.web.template_release.wasm32.nothreads.wasm`.
+
+The script exports the project to `build-web-local/`, copies the
+ngspice bridge + worker JS, copies the ngspice wasm artifacts,
+injects the bridge `<script>` tag into `index.html`, and serves
+the directory via `python3 -m http.server` on port `8000`
+(override with `SPICE3D_LOCAL_HTTP_SERVER_PORT=...`). Open the URL
+in a Private Window to avoid Firefox reusing a stale `index.wasm`
+from an earlier session.
 
 ## CI / deploy
 

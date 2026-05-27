@@ -100,4 +100,15 @@ SchematicLoadResult load_schematic_from_file(
 		const std::string &xschemrc_file_path = std::string(),
 		const std::vector<std::string> &extra_symbol_search_paths = {});
 
+struct GeneratedSpiceNetlist {
+	bool was_successful = false;
+	std::string error_message;
+	std::string spice_netlist_text;
+};
+
+GeneratedSpiceNetlist generate_spice_netlist_text_from_schematic_file(
+		const std::string &schematic_file_path,
+		const std::string &xschemrc_file_path = std::string(),
+		const std::vector<std::string> &extra_symbol_search_paths = {});
+
 } // namespace spice3d

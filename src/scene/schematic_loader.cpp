@@ -1,5 +1,6 @@
 #include "schematic_loader.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -215,6 +216,70 @@ Schematic schematic_from_parsed_xschem(const xs_schematic &parsed_schematic) {
 }
 
 } // namespace
+
+GeneratedSpiceNetlist generate_spice_netlist_text_from_schematic_file(
+		const std::string &schematic_file_path,
+		const std::string &xschemrc_file_path,
+		const std::vector<std::string> &extra_symbol_search_paths) {
+	GeneratedSpiceNetlist netlist_result;
+
+	xs_library_path symbol_library_path;
+	xs_library_path_init(&symbol_library_path);
+	load_xschemrc_into_library_path_if_provided(xschemrc_file_path, &symbol_library_path);
+	append_search_paths_to_library_path(extra_symbol_search_paths, &symbol_library_path);
+	add_schematic_own_directory_to_library_path(schematic_file_path, &symbol_library_path);
+
+	xs_schematic parsed_schematic;
+	std::memset(&parsed_schematic, 0, sizeof(parsed_schematic));
+	if (xs_parse_schematic(schematic_file_path.c_str(), &parsed_schematic) != 0) {
+		xs_library_path_free(&symbol_library_path);
+		netlist_result.error_message = "failed to parse schematic: " + schematic_file_path;
+		return netlist_result;
+	}
+
+	constexpr int lvs_mode_disabled = 0;
+	xs_netlister netlister;
+	xs_netlister_init(&netlister, &symbol_library_path, lvs_mode_disabled);
+	xs_netlister_resolve_symbols(&netlister, &parsed_schematic);
+
+	FILE *netlist_scratch_temporary_file = std::tmpfile();
+	if (netlist_scratch_temporary_file == nullptr) {
+		xs_netlister_free(&netlister);
+		xs_free_schematic(&parsed_schematic);
+		xs_library_path_free(&symbol_library_path);
+		netlist_result.error_message = "tmpfile() failed while preparing netlist buffer";
+		return netlist_result;
+	}
+
+	const int emit_return_code = xs_netlister_emit_spice(
+			&netlister, &parsed_schematic, netlist_scratch_temporary_file);
+	std::fflush(netlist_scratch_temporary_file);
+
+	if (emit_return_code == 0) {
+		std::fseek(netlist_scratch_temporary_file, 0, SEEK_END);
+		const long netlist_text_byte_length = std::ftell(netlist_scratch_temporary_file);
+		std::rewind(netlist_scratch_temporary_file);
+		if (netlist_text_byte_length > 0) {
+			std::string netlist_text_buffer(static_cast<size_t>(netlist_text_byte_length), '\0');
+			const size_t bytes_read = std::fread(
+					netlist_text_buffer.data(),
+					1,
+					static_cast<size_t>(netlist_text_byte_length),
+					netlist_scratch_temporary_file);
+			netlist_text_buffer.resize(bytes_read);
+			netlist_result.spice_netlist_text = std::move(netlist_text_buffer);
+		}
+		netlist_result.was_successful = true;
+	} else {
+		netlist_result.error_message = "xs_netlister_emit_spice returned " + std::to_string(emit_return_code);
+	}
+	std::fclose(netlist_scratch_temporary_file);
+
+	xs_netlister_free(&netlister);
+	xs_free_schematic(&parsed_schematic);
+	xs_library_path_free(&symbol_library_path);
+	return netlist_result;
+}
 
 SchematicLoadResult load_schematic_from_file(
 		const std::string &schematic_file_path,
