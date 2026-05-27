@@ -239,12 +239,6 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
-	print("[spice3d] ----- full testbench netlist sent to ngspice -----")
-	for one_testbench_line_index in netlist_lines_with_pdk_include.size():
-		print("[spice3d]   %02d | %s" % [
-			one_testbench_line_index,
-			netlist_lines_with_pdk_include[one_testbench_line_index]])
-	print("[spice3d] ----- end testbench netlist -----")
 	spice3d_root_node.push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
 			netlist_lines_with_pdk_include,
 			compute_transient_timestep_seconds_for_current_time_warp(),
