@@ -15,6 +15,7 @@ const PDK_CIEL_CORS_PROXY_URL_PREFIX := "https://ciel-cors-proxy.sifferman.worke
 
 const SKY130_FAMILY_SPEC := {
 	"name": "sky130",
+	"cache_key_revision": 1,
 	"variants_to_expose_xschem_libraries_for": ["sky130A", "sky130B"],
 	"ciel_manifest_url": "https://www-archive.fossi-foundation.org/ciel-releases/sky130/manifest.json",
 	"ciel_fallback_version_if_manifest_unreachable": "74c0e6b118a67d94c24172143d3bd597473fa63d",
@@ -40,6 +41,7 @@ const SKY130_FAMILY_SPEC := {
 
 const GF180MCU_FAMILY_SPEC := {
 	"name": "gf180mcu",
+	"cache_key_revision": 2,
 	"variants_to_expose_xschem_libraries_for": ["gf180mcuA", "gf180mcuB", "gf180mcuC", "gf180mcuD"],
 	"ciel_manifest_url": "https://www-archive.fossi-foundation.org/ciel-releases/gf180mcu/manifest.json",
 	"ciel_fallback_version_if_manifest_unreachable": "61a056e180dac7dcc6d4eb7529e2231f95105746",
@@ -250,10 +252,13 @@ func ensure_pdk_family_is_cached_using_extractor_node(
 		pdk_family_name: String,
 		ciel_version: String) -> void:
 	var spec := family_spec_for(pdk_family_name)
+	var cache_key_revision: int = spec["cache_key_revision"]
 	var local_cache_root_user_path := user_path_for_pdk_family_cache_root(pdk_family_name, ciel_version)
-	var local_cache_complete_marker_user_path := local_cache_root_user_path + "/.fetch_complete"
+	var local_cache_complete_marker_user_path := "%s/.fetch_complete_rev%d" % [
+			local_cache_root_user_path, cache_key_revision]
 	if FileAccess.file_exists(local_cache_complete_marker_user_path):
-		print("[spice3d] %s PDK cache HIT (version=%s)" % [pdk_family_name, ciel_version])
+		print("[spice3d] %s PDK cache HIT (version=%s rev=%d)" % [
+				pdk_family_name, ciel_version, cache_key_revision])
 		return
 	print("[spice3d] %s PDK cache MISS, fetching release metadata from GitHub API..." % pdk_family_name)
 	DirAccess.make_dir_recursive_absolute(local_cache_root_user_path)
@@ -276,7 +281,8 @@ func ensure_pdk_family_is_cached_using_extractor_node(
 					pdk_family_name, one_archive_filename])
 			return
 	write_cache_complete_marker_at_path(local_cache_complete_marker_user_path)
-	print("[spice3d] %s PDK cache populated (version=%s)" % [pdk_family_name, ciel_version])
+	print("[spice3d] %s PDK cache populated (version=%s rev=%d)" % [
+			pdk_family_name, ciel_version, cache_key_revision])
 
 
 func fetch_pdk_release_metadata_from_github_api(
