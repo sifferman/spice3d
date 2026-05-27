@@ -7,7 +7,7 @@
 const path = require('path');
 
 const ngspice_emscripten_build_directory =
-		path.resolve(__dirname, '..', 'third_party', 'ngspice', 'build-emscripten');
+		path.resolve(__dirname, '..', '..', 'third_party', 'ngspice', 'build-emscripten');
 const ngspice_module_javascript_path =
 		path.resolve(ngspice_emscripten_build_directory, 'ngspice.js');
 
