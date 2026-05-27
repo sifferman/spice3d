@@ -4,7 +4,10 @@ extends RefCounted
 const SKY130_NETLIST_SPEC := {
 	"top_level_lib_spice_virtual_path_in_worker": "/sky130A/libs.tech/combined/sky130.lib.spice",
 	"lib_corner_name": "tt",
-	"consolidated_stdcell_include_path_in_worker": "/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
+	"extra_include_paths_to_prepend_before_dot_lib_directive": [],
+	"extra_include_paths_to_append_after_dot_lib_directive": [
+		"/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
+	],
 	"testbench_rail_voltage_definition_lines": [
 		"V_SPICE3D_TESTBENCH_VPWR VPWR 0 DC 1.8",
 		"V_SPICE3D_TESTBENCH_VGND VGND 0 DC 0",
@@ -21,7 +24,10 @@ const SKY130_NETLIST_SPEC := {
 const GF180MCU_NETLIST_SPEC := {
 	"top_level_lib_spice_virtual_path_in_worker": "/gf180mcuD/libs.tech/ngspice/sm141064.spice",
 	"lib_corner_name": "typical",
-	"consolidated_stdcell_include_path_in_worker": "",
+	"extra_include_paths_to_prepend_before_dot_lib_directive": [
+		"/gf180mcuD/libs.tech/ngspice/design.spice",
+	],
+	"extra_include_paths_to_append_after_dot_lib_directive": [],
 	"testbench_rail_voltage_definition_lines": [
 		"V_SPICE3D_TESTBENCH_VDD VDD 0 DC 5.0",
 		"V_SPICE3D_TESTBENCH_VSS VSS 0 DC 0",
@@ -141,12 +147,13 @@ static func convert_subckt_netlist_to_top_level_testbench(
 		pdk_family_name: String) -> PackedStringArray:
 	var spec := netlist_spec_for(pdk_family_name)
 	var top_level_testbench_lines := PackedStringArray()
+	for one_include_path_before_lib in spec["extra_include_paths_to_prepend_before_dot_lib_directive"]:
+		top_level_testbench_lines.append(".include %s" % one_include_path_before_lib)
 	top_level_testbench_lines.append(".lib %s %s" % [
 			spec["top_level_lib_spice_virtual_path_in_worker"],
 			spec["lib_corner_name"]])
-	var consolidated_stdcell_path: String = spec["consolidated_stdcell_include_path_in_worker"]
-	if not consolidated_stdcell_path.is_empty():
-		top_level_testbench_lines.append(".include %s" % consolidated_stdcell_path)
+	for one_include_path_after_lib in spec["extra_include_paths_to_append_after_dot_lib_directive"]:
+		top_level_testbench_lines.append(".include %s" % one_include_path_after_lib)
 	top_level_testbench_lines.append_array(
 			PackedStringArray(spec["testbench_rail_voltage_definition_lines"]))
 	var raw_xschem_netlist_contained_a_dot_end_directive := false
