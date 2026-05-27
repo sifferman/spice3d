@@ -30,7 +30,7 @@ func test_external_voltage_source_keyword_passes_through_to_ngspice_unchanged() 
 		".ends",
 	])
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission)
+			raw_xschem_emission, "sky130")
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_true(single_blob_for_inspection.contains("VBUTTON1 net1 VGND external"),
 			"`external` is a real ngspice source type under --with-ngshared; "
@@ -72,7 +72,7 @@ func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrappe
 		".end",
 	])
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission)
+			raw_xschem_emission, "sky130")
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_false(single_blob_for_inspection.contains(".subckt button_test"),
 			"`.subckt button_test` wrapper header must be removed — ngspice needs a top-level testbench.")
@@ -110,3 +110,39 @@ func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrappe
 	assert_true(dot_end_position_in_testbench >= 0,
 			"`.end` directive must survive into the converted testbench — ngspice needs "
 			+ "it to finalize the netlist before `run`; stripping it produces 'no circuit loaded'.")
+
+
+func test_gf180mcu_spec_produces_5v_rails_and_correct_lib_path() -> void:
+	var raw_xschem_emission := PackedStringArray([
+		".subckt example_top out",
+		"VBUTTON1 net1 VSS external",
+		".ends",
+		".end",
+	])
+	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
+			raw_xschem_emission, "gf180mcu")
+	var single_blob_for_inspection := "\n".join(converted_lines)
+	assert_true(single_blob_for_inspection.contains(".lib /gf180mcuD/libs.tech/combined/gf180mcu.lib.spice typical"),
+			"gf180mcu testbench must reference the gf180mcuD top-level .lib at the typical corner.")
+	assert_true(single_blob_for_inspection.contains("V_SPICE3D_TESTBENCH_VDD VDD 0 DC 5.0"),
+			"gf180mcu mcu7t5v0 cells are 5V parts — the testbench must drive VDD to 5.0 V.")
+	assert_false(single_blob_for_inspection.contains(".include /sky130A/"),
+			"gf180mcu testbench must not include any sky130 paths.")
+
+
+func test_gf180mcu_internal_net_extraction_treats_vdd_and_vss_as_rails_not_internal() -> void:
+	var raw_xschem_emission := PackedStringArray([
+		".subckt example_top out",
+		"x1 net1 VDD VSS gf180mcu_fd_sc_mcu7t5v0__inv_1",
+		".ends",
+	])
+	var internal_nets: PackedStringArray = XschemNetlistTransformer.extract_internal_net_names_from_subckt_netlist(
+			raw_xschem_emission, "gf180mcu")
+	assert_true(internal_nets.has("net1"),
+			"net1 is a real internal net and should be returned.")
+	assert_false(internal_nets.has("vdd"),
+			"VDD is a power rail under the gf180mcu spec and must not be treated as internal.")
+	assert_false(internal_nets.has("vss"),
+			"VSS is a power rail under the gf180mcu spec and must not be treated as internal.")
+	assert_false(internal_nets.has("gf180mcu_fd_sc_mcu7t5v0__inv_1"),
+			"PDK cell references must not be treated as internal nets.")
