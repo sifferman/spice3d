@@ -11,12 +11,6 @@ const ngspice_emscripten_build_directory = path.resolve(
 		repository_root_directory, 'third_party', 'ngspice', 'build-emscripten');
 const ngspice_module_javascript_path = path.resolve(
 		ngspice_emscripten_build_directory, 'ngspice.js');
-const repo_bundled_sc_hd_consolidated_spice_file_path = path.resolve(
-		repository_root_directory,
-		'project', 'sky130_pdk_bundled',
-		'sky130A', 'libs.ref', 'sky130_fd_sc_hd', 'spice', 'sky130_fd_sc_hd.spice');
-const memfs_destination_path_for_sc_hd_consolidated_spice_file =
-		'/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice';
 
 const FAKE_PROC_MEMINFO_TEXT_FOR_NGSPICE_BUFFER_SIZING = [
 	'MemTotal:        1048576 kB',
@@ -59,13 +53,6 @@ function stageHostDirectoryIntoNgspiceMemfsAtSameRelativePath(
 	}
 }
 
-function stageRepoBundledScHdSpiceIntoNgspiceMemfs(ngspice_module) {
-	ngspice_module.FS.mkdirTree(
-			path.posix.dirname(memfs_destination_path_for_sc_hd_consolidated_spice_file));
-	ngspice_module.FS.writeFile(
-			memfs_destination_path_for_sc_hd_consolidated_spice_file,
-			fs.readFileSync(repo_bundled_sc_hd_consolidated_spice_file_path, 'utf8'));
-}
 
 function buildMinimalDeckThatHasNoLibrariesNoTransistorsNoIncludes() {
 	return [
@@ -122,9 +109,6 @@ async function bootNgspiceAndCompareReloadCostsAcrossConditions() {
 			path.join(pdk_root_environment_value, 'sky130A', 'libs.tech', 'combined', 'sky130.lib.spice'))) {
 		emitSkipMessageAndExitCleanly('PDK_ROOT is unset or sky130A/libs.tech/combined is missing.');
 	}
-	if (!fs.existsSync(repo_bundled_sc_hd_consolidated_spice_file_path)) {
-		emitSkipMessageAndExitCleanly('bundled sky130_fd_sc_hd.spice missing.');
-	}
 
 	const createNgspiceModule = require(ngspice_module_javascript_path);
 	const ngspice_module = await createNgspiceModule({
@@ -147,7 +131,10 @@ async function bootNgspiceAndCompareReloadCostsAcrossConditions() {
 			ngspice_module,
 			path.join(pdk_root_environment_value, 'sky130A', 'libs.ref', 'sky130_fd_pr', 'spice'),
 			'/sky130A/libs.ref/sky130_fd_pr/spice');
-	stageRepoBundledScHdSpiceIntoNgspiceMemfs(ngspice_module);
+	stageHostDirectoryIntoNgspiceMemfsAtSameRelativePath(
+			ngspice_module,
+			path.join(pdk_root_environment_value, 'sky130A', 'libs.ref', 'sky130_fd_sc_hd', 'spice'),
+			'/sky130A/libs.ref/sky130_fd_sc_hd/spice');
 
 	ngspice_module._ngSpice_Init(
 			ngspice_module.addFunction(() => 0, 'iiii'),
