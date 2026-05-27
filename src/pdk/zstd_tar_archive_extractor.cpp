@@ -361,61 +361,114 @@ private:
 
 } // namespace
 
+struct ZstdTarStreamingExtractor::Impl {
+	Impl(const std::string &output_directory_absolute_path,
+			const std::vector<std::string> &keep_only_paths_containing_substrings)
+			: decompression_context(ZSTD_createDCtx(), ZSTD_freeDCtx),
+			tar_consumer(output_directory_absolute_path, keep_only_paths_containing_substrings),
+			decompressed_chunk_buffer(ZSTD_DStreamOutSize()) {}
+
+	std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)> decompression_context;
+	StreamingTarFromDecompressedBytesConsumer tar_consumer;
+	std::vector<std::uint8_t> decompressed_chunk_buffer;
+	bool reached_zstd_end_of_stream_marker = false;
+	bool encountered_fatal_error = false;
+	std::string fatal_error_message;
+};
+
+ZstdTarStreamingExtractor::ZstdTarStreamingExtractor(
+		const std::string &output_directory_absolute_path,
+		const std::vector<std::string> &keep_only_paths_containing_substrings)
+		: impl_(std::make_unique<Impl>(
+				output_directory_absolute_path,
+				keep_only_paths_containing_substrings)) {}
+
+ZstdTarStreamingExtractor::~ZstdTarStreamingExtractor() = default;
+
+bool ZstdTarStreamingExtractor::feed_compressed_chunk(
+		const std::uint8_t *compressed_bytes,
+		std::size_t compressed_bytes_length,
+		std::string *out_error_message) {
+	if (impl_->encountered_fatal_error) {
+		if (out_error_message) *out_error_message = impl_->fatal_error_message;
+		return false;
+	}
+	if (!impl_->decompression_context) {
+		impl_->encountered_fatal_error = true;
+		impl_->fatal_error_message = "ZSTD_createDCtx returned null";
+		if (out_error_message) *out_error_message = impl_->fatal_error_message;
+		return false;
+	}
+	if (compressed_bytes_length == 0) return true;
+	ZSTD_inBuffer input_state{compressed_bytes, compressed_bytes_length, 0};
+	while (input_state.pos < input_state.size) {
+		ZSTD_outBuffer output_state{
+				impl_->decompressed_chunk_buffer.data(),
+				impl_->decompressed_chunk_buffer.size(),
+				0};
+		const std::size_t step_result = ZSTD_decompressStream(
+				impl_->decompression_context.get(), &output_state, &input_state);
+		if (ZSTD_isError(step_result)) {
+			impl_->encountered_fatal_error = true;
+			impl_->fatal_error_message = std::string("ZSTD_decompressStream error: ")
+					+ ZSTD_getErrorName(step_result);
+			if (out_error_message) *out_error_message = impl_->fatal_error_message;
+			return false;
+		}
+		if (output_state.pos > 0) {
+			if (!impl_->tar_consumer.feed_decompressed_bytes(
+					impl_->decompressed_chunk_buffer.data(), output_state.pos)) {
+				impl_->encountered_fatal_error = true;
+				std::string tar_message;
+				impl_->tar_consumer.finalize(&tar_message);
+				impl_->fatal_error_message = tar_message;
+				if (out_error_message) *out_error_message = impl_->fatal_error_message;
+				return false;
+			}
+		}
+		if (step_result == 0) {
+			impl_->reached_zstd_end_of_stream_marker = true;
+			break;
+		}
+	}
+	return true;
+}
+
+ZstdTarExtractionResult ZstdTarStreamingExtractor::finalize() {
+	ZstdTarExtractionResult extraction_result;
+	if (impl_->encountered_fatal_error) {
+		extraction_result.error_message = impl_->fatal_error_message;
+		return extraction_result;
+	}
+	std::string finalize_error_message;
+	if (!impl_->tar_consumer.finalize(&finalize_error_message)) {
+		extraction_result.error_message = finalize_error_message;
+		return extraction_result;
+	}
+	extraction_result.extracted_file_count = static_cast<int>(impl_->tar_consumer.extracted_file_count());
+	extraction_result.total_bytes_written = impl_->tar_consumer.total_bytes_written();
+	extraction_result.was_successful = true;
+	return extraction_result;
+}
+
 ZstdTarExtractionResult extract_zstd_tar_archive_filtered_by_path_substring(
 		const std::uint8_t *compressed_tar_zst_bytes,
 		std::size_t compressed_tar_zst_bytes_length,
 		const std::string &filesystem_output_directory_absolute_path,
 		const std::vector<std::string> &keep_only_paths_containing_any_of_these_substrings) {
-	ZstdTarExtractionResult extraction_result;
-
-	std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)> decompression_context(
-			ZSTD_createDCtx(), ZSTD_freeDCtx);
-	if (!decompression_context) {
-		extraction_result.error_message = "ZSTD_createDCtx returned null";
-		return extraction_result;
-	}
-
-	StreamingTarFromDecompressedBytesConsumer tar_consumer(
+	ZstdTarStreamingExtractor streaming_extractor(
 			filesystem_output_directory_absolute_path,
 			keep_only_paths_containing_any_of_these_substrings);
-
-	const std::size_t decompressed_chunk_capacity = ZSTD_DStreamOutSize();
-	std::vector<std::uint8_t> decompressed_chunk_buffer(decompressed_chunk_capacity);
-
-	ZSTD_inBuffer input_state{compressed_tar_zst_bytes, compressed_tar_zst_bytes_length, 0};
-	while (input_state.pos < input_state.size) {
-		ZSTD_outBuffer output_state{
-				decompressed_chunk_buffer.data(),
-				decompressed_chunk_buffer.size(),
-				0};
-		const std::size_t step_result = ZSTD_decompressStream(
-				decompression_context.get(), &output_state, &input_state);
-		if (ZSTD_isError(step_result)) {
-			extraction_result.error_message = std::string("ZSTD_decompressStream error: ")
-					+ ZSTD_getErrorName(step_result);
-			return extraction_result;
-		}
-		if (output_state.pos > 0) {
-			if (!tar_consumer.feed_decompressed_bytes(decompressed_chunk_buffer.data(), output_state.pos)) {
-				std::string fatal_message;
-				tar_consumer.finalize(&fatal_message);
-				extraction_result.error_message = fatal_message;
-				return extraction_result;
-			}
-		}
-		if (step_result == 0 && input_state.pos == input_state.size) break;
+	std::string feed_error_message;
+	if (!streaming_extractor.feed_compressed_chunk(
+			compressed_tar_zst_bytes,
+			compressed_tar_zst_bytes_length,
+			&feed_error_message)) {
+		ZstdTarExtractionResult error_result;
+		error_result.error_message = feed_error_message;
+		return error_result;
 	}
-
-	std::string finalize_error_message;
-	if (!tar_consumer.finalize(&finalize_error_message)) {
-		extraction_result.error_message = finalize_error_message;
-		return extraction_result;
-	}
-
-	extraction_result.extracted_file_count = static_cast<int>(tar_consumer.extracted_file_count());
-	extraction_result.total_bytes_written = tar_consumer.total_bytes_written();
-	extraction_result.was_successful = true;
-	return extraction_result;
+	return streaming_extractor.finalize();
 }
 
 } // namespace spice3d

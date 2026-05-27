@@ -156,6 +156,87 @@
 					break;
 			}
 		},
+
+		activeStreamingDownloadState: null,
+
+		beginStreamingDownload: function beginStreamingDownload(downloadUrl) {
+			this.activeStreamingDownloadState = {
+				queuedChunks: [],
+				totalBytesReceived: 0,
+				isCompletelyDownloaded: false,
+				fetchErrorMessage: null,
+				httpStatusCode: 0,
+			};
+			const downloadState = this.activeStreamingDownloadState;
+			(async () => {
+				try {
+					const response = await fetch(downloadUrl);
+					downloadState.httpStatusCode = response.status;
+					if (!response.ok) {
+						downloadState.fetchErrorMessage = 'HTTP ' + response.status + ' ' + response.statusText;
+						downloadState.isCompletelyDownloaded = true;
+						return;
+					}
+					const responseBodyReader = response.body.getReader();
+					while (true) {
+						const { value: chunkUint8Array, done: streamIsExhausted } = await responseBodyReader.read();
+						if (streamIsExhausted) {
+							break;
+						}
+						downloadState.queuedChunks.push(chunkUint8Array);
+						downloadState.totalBytesReceived += chunkUint8Array.byteLength;
+					}
+					downloadState.isCompletelyDownloaded = true;
+				} catch (fetchOrStreamError) {
+					downloadState.fetchErrorMessage = String(fetchOrStreamError && fetchOrStreamError.message || fetchOrStreamError);
+					downloadState.isCompletelyDownloaded = true;
+				}
+			})();
+			return true;
+		},
+
+		takeNextStreamingChunkAsJsonStatusEnvelope: function takeNextStreamingChunkAsJsonStatusEnvelope() {
+			const downloadState = this.activeStreamingDownloadState;
+			if (!downloadState) {
+				return JSON.stringify({ status: 'no_active_download' });
+			}
+			if (downloadState.queuedChunks.length > 0) {
+				const oneChunkUint8Array = downloadState.queuedChunks.shift();
+				return JSON.stringify({
+					status: 'chunk',
+					base64ChunkBody: this.encodeUint8ArrayAsBase64WithoutStackOverflow(oneChunkUint8Array),
+					totalBytesReceivedSoFar: downloadState.totalBytesReceived,
+				});
+			}
+			if (downloadState.fetchErrorMessage) {
+				return JSON.stringify({
+					status: 'error',
+					errorMessage: downloadState.fetchErrorMessage,
+					httpStatusCode: downloadState.httpStatusCode,
+				});
+			}
+			if (downloadState.isCompletelyDownloaded) {
+				return JSON.stringify({
+					status: 'done',
+					totalBytesReceivedSoFar: downloadState.totalBytesReceived,
+				});
+			}
+			return JSON.stringify({ status: 'pending', totalBytesReceivedSoFar: downloadState.totalBytesReceived });
+		},
+
+		clearStreamingDownloadState: function clearStreamingDownloadState() {
+			this.activeStreamingDownloadState = null;
+		},
+
+		encodeUint8ArrayAsBase64WithoutStackOverflow: function encodeUint8ArrayAsBase64WithoutStackOverflow(inputUint8Array) {
+			const SAFE_FROM_CHAR_CODE_CHUNK_SIZE_TO_AVOID_ARGUMENT_LIMIT = 0x8000;
+			let asciiBinaryString = '';
+			for (let sliceStart = 0; sliceStart < inputUint8Array.length; sliceStart += SAFE_FROM_CHAR_CODE_CHUNK_SIZE_TO_AVOID_ARGUMENT_LIMIT) {
+				const oneSubSlice = inputUint8Array.subarray(sliceStart, sliceStart + SAFE_FROM_CHAR_CODE_CHUNK_SIZE_TO_AVOID_ARGUMENT_LIMIT);
+				asciiBinaryString += String.fromCharCode.apply(null, oneSubSlice);
+			}
+			return btoa(asciiBinaryString);
+		},
 	};
 
 	globalThis.spice3d = bridge;

@@ -333,39 +333,139 @@ func fetch_verify_and_extract_one_pdk_archive(
 				pdk_family_name, archive_filename])
 		return false
 	var spec := family_spec_for(pdk_family_name)
-	print("[spice3d] %s fetching %s via cors-proxy worker..." % [pdk_family_name, archive_filename])
-	var fetch_start_milliseconds := Time.get_ticks_msec()
 	var proxied_download_url := PDK_CIEL_CORS_PROXY_URL_PREFIX + upstream_github_download_url.uri_encode()
+	var output_directory_absolute_path := absolute_path_for_pdk_family_local_cache_root(pdk_family_name, ciel_version)
+	var path_substrings_to_keep := PackedStringArray(spec["archive_path_substrings_to_keep_during_extraction"])
+	if OS.has_feature("web"):
+		return await fetch_verify_and_extract_one_pdk_archive_via_streaming_on_web(
+				pdk_family_name, archive_filename, proxied_download_url, expected_sha256_hex,
+				spice3d_root_node, output_directory_absolute_path, path_substrings_to_keep)
+	return await fetch_verify_and_extract_one_pdk_archive_via_buffered_download_on_native(
+			pdk_family_name, archive_filename, proxied_download_url, expected_sha256_hex,
+			spice3d_root_node, output_directory_absolute_path, path_substrings_to_keep)
+
+
+func fetch_verify_and_extract_one_pdk_archive_via_buffered_download_on_native(
+		pdk_family_name: String,
+		archive_filename: String,
+		proxied_download_url: String,
+		expected_sha256_hex: String,
+		spice3d_root_node: Node,
+		output_directory_absolute_path: String,
+		path_substrings_to_keep: PackedStringArray) -> bool:
+	print("[spice3d] %s fetching %s (native buffered path)..." % [pdk_family_name, archive_filename])
+	var fetch_start_milliseconds := Time.get_ticks_msec()
 	var archive_bytes := await download_url_as_byte_array(proxied_download_url)
 	if archive_bytes.is_empty():
-		push_error("%s %s download failed via cors-proxy worker" % [pdk_family_name, archive_filename])
+		push_error("%s %s download failed" % [pdk_family_name, archive_filename])
 		return false
-	var fetch_duration_milliseconds := Time.get_ticks_msec() - fetch_start_milliseconds
 	print("[spice3d] %s downloaded %s (%d bytes, %d ms)" % [
-			pdk_family_name, archive_filename, archive_bytes.size(), fetch_duration_milliseconds])
+			pdk_family_name, archive_filename, archive_bytes.size(),
+			Time.get_ticks_msec() - fetch_start_milliseconds])
 	var actual_sha256_hex := compute_sha256_hex_of_byte_array(archive_bytes)
 	if actual_sha256_hex != expected_sha256_hex:
 		push_error("%s %s SHA-256 mismatch: expected %s, got %s" % [
 				pdk_family_name, archive_filename, expected_sha256_hex, actual_sha256_hex])
 		return false
-	print("[spice3d] %s %s SHA-256 verified" % [pdk_family_name, archive_filename])
 	var extract_start_milliseconds := Time.get_ticks_msec()
 	var extraction_result: Dictionary = spice3d_root_node.extract_zstd_tar_archive_filtered_by_path_substring(
-			archive_bytes,
-			absolute_path_for_pdk_family_local_cache_root(pdk_family_name, ciel_version),
-			PackedStringArray(spec["archive_path_substrings_to_keep_during_extraction"]))
+			archive_bytes, output_directory_absolute_path, path_substrings_to_keep)
 	if not extraction_result["was_successful"]:
 		push_error("%s %s extraction failed: %s" % [
 				pdk_family_name, archive_filename, str(extraction_result.get("error_message", ""))])
 		return false
-	var extract_duration_milliseconds := Time.get_ticks_msec() - extract_start_milliseconds
 	print("[spice3d] %s %s extracted %d files (%d bytes) in %d ms" % [
-			pdk_family_name,
-			archive_filename,
-			extraction_result["extracted_file_count"],
-			extraction_result["total_bytes_written"],
-			extract_duration_milliseconds])
+			pdk_family_name, archive_filename,
+			extraction_result["extracted_file_count"], extraction_result["total_bytes_written"],
+			Time.get_ticks_msec() - extract_start_milliseconds])
 	return true
+
+
+const STREAMING_DOWNLOAD_POLL_INTERVAL_SECONDS_BETWEEN_EMPTY_RESPONSES := 0.05
+
+
+func fetch_verify_and_extract_one_pdk_archive_via_streaming_on_web(
+		pdk_family_name: String,
+		archive_filename: String,
+		proxied_download_url: String,
+		expected_sha256_hex: String,
+		spice3d_root_node: Node,
+		output_directory_absolute_path: String,
+		path_substrings_to_keep: PackedStringArray) -> bool:
+	print("[spice3d] %s streaming %s via cors-proxy worker (chunked, low-memory)..."
+			% [pdk_family_name, archive_filename])
+	var streaming_pipeline_start_milliseconds := Time.get_ticks_msec()
+	spice3d_root_node.begin_streaming_zstd_tar_extraction(
+			output_directory_absolute_path, path_substrings_to_keep)
+	var json_escaped_url := JSON.stringify(proxied_download_url)
+	JavaScriptBridge.eval("globalThis.spice3d && globalThis.spice3d.beginStreamingDownload(%s)" % json_escaped_url, true)
+	var incremental_sha256 := HashingContext.new()
+	incremental_sha256.start(HashingContext.HASH_SHA256)
+	var total_chunk_bytes_fed := 0
+	while true:
+		var bridge_returned_envelope: Variant = JavaScriptBridge.eval(
+				"globalThis.spice3d && globalThis.spice3d.takeNextStreamingChunkAsJsonStatusEnvelope()", true)
+		if not (bridge_returned_envelope is String):
+			push_error("%s %s streaming download: bridge returned non-string" % [
+					pdk_family_name, archive_filename])
+			abort_streaming_extraction(spice3d_root_node)
+			return false
+		var parsed_envelope: Variant = JSON.parse_string(bridge_returned_envelope)
+		if not (parsed_envelope is Dictionary):
+			push_error("%s %s streaming download: bridge envelope did not parse as JSON" % [
+					pdk_family_name, archive_filename])
+			abort_streaming_extraction(spice3d_root_node)
+			return false
+		var status_field: String = parsed_envelope.get("status", "")
+		if status_field == "chunk":
+			var chunk_bytes: PackedByteArray = Marshalls.base64_to_raw(parsed_envelope["base64ChunkBody"])
+			incremental_sha256.update(chunk_bytes)
+			var feed_result: Dictionary = spice3d_root_node.feed_streaming_zstd_tar_compressed_chunk(chunk_bytes)
+			if not feed_result["was_successful"]:
+				push_error("%s %s streaming extraction failed: %s" % [
+						pdk_family_name, archive_filename, str(feed_result.get("error_message", ""))])
+				abort_streaming_extraction(spice3d_root_node)
+				return false
+			total_chunk_bytes_fed += chunk_bytes.size()
+			continue
+		if status_field == "pending":
+			await get_tree().create_timer(STREAMING_DOWNLOAD_POLL_INTERVAL_SECONDS_BETWEEN_EMPTY_RESPONSES).timeout
+			continue
+		if status_field == "done":
+			break
+		if status_field == "error":
+			push_error("%s %s streaming download failed: %s (status=%d)" % [
+					pdk_family_name, archive_filename,
+					str(parsed_envelope.get("errorMessage", "")),
+					int(parsed_envelope.get("httpStatusCode", 0))])
+			abort_streaming_extraction(spice3d_root_node)
+			return false
+		push_error("%s %s streaming download: unknown bridge status '%s'" % [
+				pdk_family_name, archive_filename, status_field])
+		abort_streaming_extraction(spice3d_root_node)
+		return false
+	JavaScriptBridge.eval("globalThis.spice3d && globalThis.spice3d.clearStreamingDownloadState()", true)
+	var actual_sha256_hex := incremental_sha256.finish().hex_encode()
+	if actual_sha256_hex != expected_sha256_hex:
+		push_error("%s %s SHA-256 mismatch (streamed): expected %s, got %s" % [
+				pdk_family_name, archive_filename, expected_sha256_hex, actual_sha256_hex])
+		abort_streaming_extraction(spice3d_root_node)
+		return false
+	var finalize_result: Dictionary = spice3d_root_node.finalize_streaming_zstd_tar_extraction()
+	if not finalize_result["was_successful"]:
+		push_error("%s %s streaming finalize failed: %s" % [
+				pdk_family_name, archive_filename, str(finalize_result.get("error_message", ""))])
+		return false
+	print("[spice3d] %s %s streamed+extracted %d bytes -> %d files (%d bytes on disk) in %d ms" % [
+			pdk_family_name, archive_filename, total_chunk_bytes_fed,
+			finalize_result["extracted_file_count"], finalize_result["total_bytes_written"],
+			Time.get_ticks_msec() - streaming_pipeline_start_milliseconds])
+	return true
+
+
+func abort_streaming_extraction(spice3d_root_node: Node) -> void:
+	JavaScriptBridge.eval("globalThis.spice3d && globalThis.spice3d.clearStreamingDownloadState()", true)
+	spice3d_root_node.finalize_streaming_zstd_tar_extraction()
 
 
 static func compute_sha256_hex_of_byte_array(input_bytes: PackedByteArray) -> String:

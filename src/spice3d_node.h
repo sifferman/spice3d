@@ -16,6 +16,7 @@
 namespace spice3d {
 
 class SpiceSimulator;
+class ZstdTarStreamingExtractor;
 
 class Spice3DNode : public godot::Node {
 	GDCLASS(Spice3DNode, godot::Node)
@@ -63,6 +64,13 @@ public:
 			const godot::String &filesystem_output_directory_absolute_path,
 			const godot::PackedStringArray &keep_only_paths_containing_any_of_these_substrings);
 
+	bool begin_streaming_zstd_tar_extraction(
+			const godot::String &filesystem_output_directory_absolute_path,
+			const godot::PackedStringArray &keep_only_paths_containing_any_of_these_substrings);
+	godot::Dictionary feed_streaming_zstd_tar_compressed_chunk(
+			const godot::PackedByteArray &compressed_chunk_bytes);
+	godot::Dictionary finalize_streaming_zstd_tar_extraction();
+
 	void on_button_area_input_event(
 			godot::Camera3D *picking_camera,
 			godot::Ref<godot::InputEvent> input_event,
@@ -73,6 +81,7 @@ public:
 
 private:
 	std::unique_ptr<SpiceSimulator> simulator;
+	std::unique_ptr<ZstdTarStreamingExtractor> active_streaming_zstd_tar_extractor;
 };
 
 } // namespace spice3d
