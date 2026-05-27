@@ -80,16 +80,16 @@ jobs:
         run: scripts/build-ngspice-for-emscripten.sh
 
       - name: Verify ngspice wasm runs an RC transient correctly
-        run: node scripts/test-ngspice-wasm.js
+        run: node test/node/test-ngspice-wasm.js
 
       - name: Verify ngspice wasm reacts to live `alter` commands
-        run: node scripts/test-ngspice-wasm-interactive.js
+        run: node test/node/test-ngspice-wasm-interactive.js
 
       - name: Verify SendChar diagnostics reach the host
-        run: node scripts/test-ngspice-wasm-sendchar-surface.js
+        run: node test/node/test-ngspice-wasm-sendchar-surface.js
 
       - name: Verify button-toggle end-to-end (skips without PDK_ROOT)
-        run: node scripts/test-ngspice-wasm-button-toggle-end-to-end.js
+        run: node test/node/test-ngspice-wasm-button-toggle-end-to-end.js
 
       - name: Run host-C++ unit tests (schematic loader, streaming zstd-tar extractor)
         run: make -C test run

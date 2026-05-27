@@ -1,6 +1,8 @@
 extends Node3D
 
 const SiPrefixTime = preload("res://si_prefix_time_formatter.gd")
+const TimeWarpParser = preload("res://time_warp_parser.gd")
+const XschemNetlistTransformer = preload("res://xschem_netlist_transformer.gd")
 
 @onready var schematic_view: Node3D = $SchematicView
 @onready var status_label: Label = $StatusOverlay/StatusLabel
@@ -142,12 +144,12 @@ func populate_time_warp_option_button_with_supported_units() -> void:
 
 
 func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) -> void:
-	var parsed_simulated_seconds_per_real_second: float = parse_time_warp_input_text_to_simulated_seconds_per_real_second(
+	var parsed_simulated_seconds_per_real_second: float = TimeWarpParser.parse_input_text_to_simulated_seconds_per_real_second(
 			submitted_input_text)
 	if is_nan(parsed_simulated_seconds_per_real_second):
 		print("[spice3d] ignored invalid time-warp input %s — expected '<0-1000> <ps|ns|us>'" % [
 				JSON.stringify(submitted_input_text)])
-		time_warp_input_line_edit.text = format_simulated_seconds_per_real_second_as_input_text(
+		time_warp_input_line_edit.text = TimeWarpParser.format_simulated_seconds_per_real_second_as_input_text(
 				currently_selected_time_warp_simulated_seconds_per_real_second)
 		return
 	currently_selected_time_warp_simulated_seconds_per_real_second = parsed_simulated_seconds_per_real_second
@@ -155,7 +157,7 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 	queued_samples_awaiting_playback_to_wires.clear()
 	if discarded_old_pace_sample_count > 0:
 		print("[spice3d] discarded %d queued sample(s) from previous time-warp setting" % discarded_old_pace_sample_count)
-	if currently_selected_time_warp_simulated_seconds_per_real_second == TIME_WARP_INPUT_PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND:
+	if currently_selected_time_warp_simulated_seconds_per_real_second == TimeWarpParser.PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND:
 		print("[spice3d] time-warp set to 0 — simulation paused; wires hold last displayed state")
 		if spice3d_root_node_for_sample_polling != null:
 			spice3d_root_node_for_sample_polling.halt_simulation_on_web_simulator()
@@ -166,40 +168,6 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 	if spice3d_root_node_for_sample_polling != null:
 		spice3d_root_node_for_sample_polling.update_time_warp_timestep_on_web_simulator(
 				compute_transient_timestep_seconds_for_current_time_warp())
-
-
-const TIME_WARP_INPUT_PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND := 0.0
-
-
-func parse_time_warp_input_text_to_simulated_seconds_per_real_second(input_text: String) -> float:
-	var trimmed_lowercase_text := input_text.strip_edges().to_lower().replace("µ", "u")
-	if trimmed_lowercase_text.is_valid_float() and trimmed_lowercase_text.to_float() == 0.0:
-		return TIME_WARP_INPUT_PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND
-	var unit_multiplier_in_seconds := 0.0
-	if trimmed_lowercase_text.ends_with("ps"):
-		unit_multiplier_in_seconds = 1.0e-12
-	elif trimmed_lowercase_text.ends_with("ns"):
-		unit_multiplier_in_seconds = 1.0e-9
-	elif trimmed_lowercase_text.ends_with("us"):
-		unit_multiplier_in_seconds = 1.0e-6
-	else:
-		return NAN
-	var numeric_text_without_unit_suffix := trimmed_lowercase_text.substr(
-			0, trimmed_lowercase_text.length() - 2).strip_edges()
-	if not numeric_text_without_unit_suffix.is_valid_float():
-		return NAN
-	var numeric_value: float = numeric_text_without_unit_suffix.to_float()
-	if numeric_value < 0.0 or numeric_value > TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE:
-		return NAN
-	return numeric_value * unit_multiplier_in_seconds
-
-
-func format_simulated_seconds_per_real_second_as_input_text(seconds_value: float) -> String:
-	if seconds_value >= 1.0e-6:
-		return "%s us" % str(seconds_value * 1.0e6)
-	if seconds_value >= 1.0e-9:
-		return "%s ns" % str(seconds_value * 1.0e9)
-	return "%s ps" % str(seconds_value * 1.0e12)
 
 
 func compute_transient_timestep_seconds_for_current_time_warp() -> float:
@@ -215,7 +183,6 @@ const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
 const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
 const MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES: int = 60
 
-const TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE := 1000.0
 const TIME_WARP_DEFAULT_INPUT_TEXT := "100 ps"
 const TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND := 100.0e-12
 
@@ -225,15 +192,11 @@ const SIMULATION_SAMPLE_POLL_INTERVAL_SECONDS := 0.0
 const NUMBER_OF_INITIAL_SAMPLES_TO_LOG_KEY_VOLTAGES_FOR := 3
 const MINIMUM_VOLTAGE_CHANGE_TO_LOG_A_NEW_SAMPLE_DIAGNOSTIC := 0.2
 
-const SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.tech/combined/sky130.lib.spice"
-const SKY130_PDK_LIB_CORNER_NAME := "tt"
 const SKY130_PDK_SOURCE_SUBDIRECTORIES_RELATIVE_TO_CIEL_ROOT := [
 	"/sky130A/libs.tech/combined",
 	"/sky130A/libs.ref/sky130_fd_pr/spice",
 	"/sky130A/libs.ref/sky130_fd_sc_hd/spice",
 ]
-
-const SKY130_FD_SC_HD_CONSOLIDATED_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice"
 
 var pressed_button_high_state_by_instance_name: Dictionary = {}
 var spice3d_root_node_for_sample_polling: Node = null
@@ -315,133 +278,6 @@ func stage_text_files_recursively_into_worker_filesystem(
 	return staged_file_count
 
 
-const SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH := [
-	"V_SPICE3D_TESTBENCH_VPWR VPWR 0 DC 1.8",
-	"V_SPICE3D_TESTBENCH_VGND VGND 0 DC 0",
-	"V_SPICE3D_TESTBENCH_VPB  VPB  0 DC 1.8",
-	"V_SPICE3D_TESTBENCH_VNB  VNB  0 DC 0",
-]
-
-
-func strip_xschem_escape_backslashes_from_subckt_names(spice_netlist_line: String) -> String:
-	if spice_netlist_line.find("\\") == -1: return spice_netlist_line
-	var output_characters := PackedStringArray()
-	var i := 0
-	while i < spice_netlist_line.length():
-		var one_character := spice_netlist_line[i]
-		if one_character == "\\" and i + 1 < spice_netlist_line.length():
-			output_characters.append(spice_netlist_line[i + 1])
-			i += 2
-		else:
-			output_characters.append(one_character)
-			i += 1
-	return "".join(output_characters)
-
-
-func is_subckt_wrapper_directive(spice_netlist_line: String) -> bool:
-	var stripped_line := spice_netlist_line.strip_edges()
-	if stripped_line.is_empty(): return false
-	if stripped_line.begins_with(".subckt"): return true
-	if stripped_line == ".ends" or stripped_line.begins_with(".ends "): return true
-	return false
-
-
-
-
-const POWER_RAIL_NAMES_NEVER_TREATED_AS_INTERNAL_NETS := {
-	"vpwr": true, "vgnd": true, "vpb": true, "vnb": true,
-	"0": true, "gnd": true, "vss": true, "vdd": true,
-}
-
-
-func looks_like_an_xschem_component_instance_line(stripped_lowercase_line: String) -> bool:
-	if stripped_lowercase_line.is_empty():
-		return false
-	var first_character := stripped_lowercase_line.unicode_at(0)
-	return first_character in [
-		"v".unicode_at(0), "x".unicode_at(0), "m".unicode_at(0),
-		"r".unicode_at(0), "c".unicode_at(0), "l".unicode_at(0),
-		"i".unicode_at(0), "d".unicode_at(0), "q".unicode_at(0),
-	]
-
-
-func token_looks_like_a_net_name_candidate(one_token: String) -> bool:
-	if one_token.is_empty():
-		return false
-	if one_token.contains("="):
-		return false
-	if one_token.begins_with("sky130_"):
-		return false
-	if one_token == "external":
-		return false
-	if one_token.is_valid_float():
-		return false
-	if POWER_RAIL_NAMES_NEVER_TREATED_AS_INTERNAL_NETS.has(one_token):
-		return false
-	return true
-
-
-func extract_internal_net_names_from_xschem_subckt_netlist(
-		raw_xschem_netlist_lines: PackedStringArray) -> PackedStringArray:
-	var distinct_net_names_seen_so_far := {}
-	var ordered_internal_net_names := PackedStringArray()
-	for one_xschem_line in raw_xschem_netlist_lines:
-		var stripped_lowercase_line := one_xschem_line.strip_edges().to_lower()
-		if not looks_like_an_xschem_component_instance_line(stripped_lowercase_line):
-			continue
-		var tokens_on_this_line := stripped_lowercase_line.split(" ", false)
-		if tokens_on_this_line.size() <= 1:
-			continue
-		for one_token_index in range(1, tokens_on_this_line.size()):
-			var one_token: String = tokens_on_this_line[one_token_index]
-			if not token_looks_like_a_net_name_candidate(one_token):
-				continue
-			if distinct_net_names_seen_so_far.has(one_token):
-				continue
-			distinct_net_names_seen_so_far[one_token] = true
-			ordered_internal_net_names.append(one_token)
-	return ordered_internal_net_names
-
-
-func strip_empty_parameter_assignments_from_one_spice_line(spice_line: String) -> String:
-	# xschem2spice emits empty `<param>=` tokens for sky130_fd_pr cell template
-	# slots; ngspice would otherwise consume the next token as the value and
-	# build a runaway nested expression like `ad=as=(pd=(ps=...))`.
-	var output_tokens := PackedStringArray()
-	for one_token in spice_line.split(" ", false):
-		if one_token.ends_with("="):
-			continue
-		output_tokens.append(one_token)
-	if output_tokens.size() == 1 and output_tokens[0] == "+":
-		return ""
-	return " ".join(output_tokens)
-
-
-func convert_xschem_subckt_netlist_into_top_level_testbench(
-		raw_xschem_netlist_lines: PackedStringArray) -> PackedStringArray:
-	var top_level_testbench_lines := PackedStringArray()
-	top_level_testbench_lines.append(".lib %s %s" % [
-			SKY130_PDK_TOP_LEVEL_LIB_SPICE_VIRTUAL_PATH_IN_WORKER,
-			SKY130_PDK_LIB_CORNER_NAME])
-	top_level_testbench_lines.append(".include %s"
-			% SKY130_FD_SC_HD_CONSOLIDATED_SPICE_VIRTUAL_PATH_IN_WORKER)
-	top_level_testbench_lines.append_array(
-			PackedStringArray(SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH))
-	var raw_xschem_netlist_contained_a_dot_end_directive := false
-	for one_existing_line in raw_xschem_netlist_lines:
-		if is_subckt_wrapper_directive(one_existing_line):
-			continue
-		if one_existing_line.strip_edges() == ".end":
-			raw_xschem_netlist_contained_a_dot_end_directive = true
-			continue
-		var without_empty_param_assignments := strip_empty_parameter_assignments_from_one_spice_line(one_existing_line)
-		if without_empty_param_assignments.is_empty():
-			continue
-		var without_escape_backslashes := strip_xschem_escape_backslashes_from_subckt_names(without_empty_param_assignments)
-		top_level_testbench_lines.append(without_escape_backslashes)
-	if raw_xschem_netlist_contained_a_dot_end_directive:
-		top_level_testbench_lines.append(".end")
-	return top_level_testbench_lines
 
 
 func push_spice_netlist_and_start_transient_on_web_simulator(
@@ -454,8 +290,8 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	if netlist_lines.is_empty():
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
-	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
-	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
+	var netlist_lines_with_pdk_include := XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(netlist_lines)
+	var internal_net_names_to_seed_at_half_vdd := XschemNetlistTransformer.extract_internal_net_names_from_subckt_netlist(netlist_lines)
 	print("[spice3d] BUILD-MARKER 2026-05-26-Y: pre-merge cleanup pass")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),

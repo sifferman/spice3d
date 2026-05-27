@@ -82,3 +82,5 @@ test/test_zstd_tar_archive_extractor
 # scons build output (gets copied into project/bin/<platform>/ after build)
 /bin/
 LOG.md
+build-web-test/
+a.out

@@ -22,14 +22,14 @@
 //     external callback) or is silently dropped.
 //
 // Skips with exit code 0 if PDK_ROOT or the bundled FD_SC_HD spice file
-// is missing, the same convention scripts/test-button-test-netlist-against-real-ngspice.sh
+// is missing, the same convention test/node/test-button-test-netlist-against-real-ngspice.sh
 // uses. The repo bundles sky130_fd_sc_hd.spice itself, but the .lib chain
 // (`libs.tech/combined/`) still has to come from a local ciel checkout.
 
 const fs = require('fs');
 const path = require('path');
 
-const repository_root_directory = path.resolve(__dirname, '..');
+const repository_root_directory = path.resolve(__dirname, '..', '..');
 const ngspice_emscripten_build_directory = path.resolve(
 		repository_root_directory, 'third_party', 'ngspice', 'build-emscripten');
 const ngspice_module_javascript_path = path.resolve(

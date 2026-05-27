@@ -1,5 +1,7 @@
 extends GutTest
 
+const XschemNetlistTransformer = preload("res://xschem_netlist_transformer.gd")
+
 
 var loaded_main_script_instance: Node = null
 
@@ -27,7 +29,7 @@ func test_external_voltage_source_keyword_passes_through_to_ngspice_unchanged() 
 		"VBUTTON1 net1 VGND external",
 		".ends",
 	])
-	var converted_lines: PackedStringArray = loaded_main_script_instance.convert_xschem_subckt_netlist_into_top_level_testbench(
+	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
 			raw_xschem_emission)
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_true(single_blob_for_inspection.contains("VBUTTON1 net1 VGND external"),
@@ -36,7 +38,7 @@ func test_external_voltage_source_keyword_passes_through_to_ngspice_unchanged() 
 
 
 func test_strip_xschem_escape_backslashes_removes_backslash_before_underscored_number() -> void:
-	var cleaned: String = loaded_main_script_instance.strip_xschem_escape_backslashes_from_subckt_names(
+	var cleaned: String = XschemNetlistTransformer.strip_xschem_escape_backslashes_from_subckt_names(
 			"x1 net1 VGND VNB VPB VPWR btn_out_n sky130_fd_sc_hd__\\inv_1")
 	assert_eq(cleaned,
 			"x1 net1 VGND VNB VPB VPWR btn_out_n sky130_fd_sc_hd__inv_1",
@@ -45,18 +47,18 @@ func test_strip_xschem_escape_backslashes_removes_backslash_before_underscored_n
 
 func test_strip_xschem_escape_backslashes_is_idempotent_on_clean_input() -> void:
 	var already_clean := "Xinv a b c d e f sky130_fd_sc_hd__inv_1"
-	var passed_through: String = loaded_main_script_instance.strip_xschem_escape_backslashes_from_subckt_names(
+	var passed_through: String = XschemNetlistTransformer.strip_xschem_escape_backslashes_from_subckt_names(
 			already_clean)
 	assert_eq(passed_through, already_clean,
 			"Lines without backslashes should pass through unchanged.")
 
 
 func test_is_subckt_wrapper_directive_identifies_wrapper_lines() -> void:
-	assert_true(loaded_main_script_instance.is_subckt_wrapper_directive(".subckt button_test btn_out_n"))
-	assert_true(loaded_main_script_instance.is_subckt_wrapper_directive(".ends"))
-	assert_true(loaded_main_script_instance.is_subckt_wrapper_directive(".ends button_test"))
-	assert_false(loaded_main_script_instance.is_subckt_wrapper_directive("VBUTTON1 net1 VGND"))
-	assert_false(loaded_main_script_instance.is_subckt_wrapper_directive("*.PININFO btn_out_n:O"))
+	assert_true(XschemNetlistTransformer.is_subckt_wrapper_directive(".subckt button_test btn_out_n"))
+	assert_true(XschemNetlistTransformer.is_subckt_wrapper_directive(".ends"))
+	assert_true(XschemNetlistTransformer.is_subckt_wrapper_directive(".ends button_test"))
+	assert_false(XschemNetlistTransformer.is_subckt_wrapper_directive("VBUTTON1 net1 VGND"))
+	assert_false(XschemNetlistTransformer.is_subckt_wrapper_directive("*.PININFO btn_out_n:O"))
 
 
 func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrapper_and_unescapes_subckt_names() -> void:
@@ -69,7 +71,7 @@ func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrappe
 		".ends",
 		".end",
 	])
-	var converted_lines: PackedStringArray = loaded_main_script_instance.convert_xschem_subckt_netlist_into_top_level_testbench(
+	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
 			raw_xschem_emission)
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_false(single_blob_for_inspection.contains(".subckt button_test"),
