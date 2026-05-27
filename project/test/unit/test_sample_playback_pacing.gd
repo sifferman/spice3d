@@ -56,7 +56,7 @@ func push_fake_sample_into_queue(simulated_time_seconds: float) -> void:
 
 func test_playback_step_does_not_drain_when_accumulated_delta_is_below_interval() -> void:
 	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = 100.0e-12
-	var expected_interval: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
+	var expected_interval: float = loaded_main_script_instance.WALL_CLOCK_SECONDS_BETWEEN_PLAYBACK_STEPS
 	push_fake_sample_into_queue(0.0)
 	push_fake_sample_into_queue(1.0e-12)
 	loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(expected_interval * 0.5)
@@ -66,7 +66,7 @@ func test_playback_step_does_not_drain_when_accumulated_delta_is_below_interval(
 
 func test_playback_step_drains_one_sample_when_accumulated_delta_crosses_interval() -> void:
 	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = 100.0e-12
-	var expected_interval: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
+	var expected_interval: float = loaded_main_script_instance.WALL_CLOCK_SECONDS_BETWEEN_PLAYBACK_STEPS
 	push_fake_sample_into_queue(0.0)
 	push_fake_sample_into_queue(1.0e-12)
 	loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(expected_interval * 1.01)
@@ -78,7 +78,7 @@ func test_playback_step_drains_one_sample_when_accumulated_delta_crosses_interva
 
 func test_playback_drains_all_samples_after_n_interval_long_steps() -> void:
 	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = 100.0e-12
-	var expected_interval: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
+	var expected_interval: float = loaded_main_script_instance.WALL_CLOCK_SECONDS_BETWEEN_PLAYBACK_STEPS
 	var sample_count := 10
 	for one_sample_index in sample_count:
 		push_fake_sample_into_queue(one_sample_index * 1.0e-12)
@@ -95,7 +95,7 @@ func test_per_sample_wall_interval_is_thirtieth_of_a_second_for_every_supported_
 	var time_warp_values_to_check := [1.0e-12, 5.0e-11, 1.0e-10, 1.0e-9, 1.0e-7, 1.0e-6]
 	for one_time_warp_value in time_warp_values_to_check:
 		loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = one_time_warp_value
-		var interval: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
+		var interval: float = loaded_main_script_instance.WALL_CLOCK_SECONDS_BETWEEN_PLAYBACK_STEPS
 		assert_almost_eq(interval, 1.0 / 30.0, 1.0e-9,
 				"Per-sample wall interval must stay at 1/30s regardless of T. Got %ss at T=%s." % [
 					str(interval), str(one_time_warp_value)])

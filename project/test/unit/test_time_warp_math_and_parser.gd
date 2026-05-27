@@ -3,11 +3,8 @@ extends GutTest
 const TimeWarpParser = preload("res://time_warp_parser.gd")
 
 
-# Exercises the pure functions in main.gd that derive ngspice tran
-# parameters and wall-clock playback pacing from the user-typed
-# time-warp value. None of these access @onready vars or scene
-# tree state, so we can call them directly on a freshly-instantiated
-# main.gd Node.
+# Exercises TimeWarpParser (pure parser) plus main.gd's tran-timestep
+# helper, both of which are independent of the scene tree.
 
 
 var loaded_main_script_instance: Node = null
@@ -143,7 +140,7 @@ func test_wall_per_sample_is_thirtieth_of_a_second_regardless_of_time_warp() -> 
 	var time_warp_values_to_check := [1.0e-12, 50.0e-12, 1.0e-9, 100.0e-9, 1.0e-6]
 	for one_time_warp_value in time_warp_values_to_check:
 		loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = one_time_warp_value
-		var computed_wall_per_sample: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
+		var computed_wall_per_sample: float = loaded_main_script_instance.WALL_CLOCK_SECONDS_BETWEEN_PLAYBACK_STEPS
 		assert_almost_eq(computed_wall_per_sample, 1.0 / 30.0, 1.0e-9,
 				"At T = %s the playback rate must stay locked at ~30 samples/wall-second." % str(one_time_warp_value))
 
@@ -153,6 +150,6 @@ func test_wall_per_sample_is_thirtieth_of_a_second_regardless_of_time_warp() -> 
 func test_user_typed_50_ps_resolves_to_thirty_hz_playback() -> void:
 	var parsed_value: float = TimeWarpParser.parse_input_text_to_simulated_seconds_per_real_second("50 ps")
 	loaded_main_script_instance.currently_selected_time_warp_simulated_seconds_per_real_second = parsed_value
-	var computed_wall_per_sample: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
+	var computed_wall_per_sample: float = loaded_main_script_instance.WALL_CLOCK_SECONDS_BETWEEN_PLAYBACK_STEPS
 	assert_almost_eq(computed_wall_per_sample, 1.0 / 30.0, 1.0e-6,
 			"Typing '50 ps' should yield ~30 sample-paints per wall second.")
