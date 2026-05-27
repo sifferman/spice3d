@@ -356,52 +356,13 @@ const SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH := [
 	"V_SPICE3D_TESTBENCH_VNB  VNB  0 DC 0",
 ]
 
-# Loosened solver tolerances for digital-only visualization. ngspice's
-# defaults are tuned for analog-precise BJT/MOSFET DC operating points;
-# for a circuit whose only visible output is wire-color thresholding
-# around vdd/2, we accept ~mV voltage and ~10nA current errors in
-# exchange for fewer Newton iterations per timestep and aggressively
-# skipped BSIM4 model evaluations for stable transistors. The wire-color
-# threshold lives at ~900 mV so mV-scale noise is invisible.
-#
-# Per option (with defaults in parentheses):
-#   reltol=1e-2 (1e-3)   - relative Newton convergence; 1% of any voltage
-#                          is below pixel-color resolution.
-#   abstol=1e-8 (1e-12)  - absolute current convergence; 10 nA vs sky130
-#                          mA-scale currents = 7 orders of magnitude below
-#                          anything visible.
-#   vntol=1e-3 (1e-6)    - absolute voltage convergence; 1 mV vs 1.8 V
-#                          swing = 0.05% (invisible to color threshold).
-#   chgtol=1e-12 (1e-14) - charge convergence on capacitive integration.
-#   trtol=50 (7)         - LTE overestimation factor; ngspice's transient
-#                          truncation-error estimator overshoots actual
-#                          error; raising trtol lets the integrator take
-#                          larger internal steps before bisecting.
-#   bypass=1 (0)         - in a 9-stage RO only 1-2 stages transition at
-#                          a time; bypass skips re-evaluating the other
-#                          7-8 BSIM4 models per Newton iteration. See
-#                          bsim4/b4ld.c:509-603 (the `#ifndef NOBYPASS`
-#                          path). Single biggest knob for this workload.
-#   gmin=1e-9 (1e-12)    - 1000x larger min-conductance for better-
-#                          conditioned MNA matrix; adds at most ~1 nA of
-#                          leakage to each node, invisible at this scale.
-#   itl4=200 (10)        - lets the solver iterate harder per timestep
-#                          instead of falling back to bisection (which is
-#                          more expensive when tolerances are loose).
-#   maxord=2 (6)         - cap BDF integration order at 2; matches what
-#                          most digital simulators use anyway and keeps
-#                          per-step matrix work simpler.
-const NGSPICE_DOT_OPTION_LINES_FOR_DIGITAL_VISUALIZATION_PRESET := [
-	".option reltol=1e-2",
-	".option abstol=1e-8",
-	".option vntol=1e-3",
-	".option chgtol=1e-12",
-	".option trtol=50",
-	".option bypass=1",
-	".option gmin=1e-9",
-	".option itl4=200",
-	".option maxord=2",
-]
+# Solver-tolerance preset moved to project/web/ngspice_worker.js so the
+# worker can apply it AFTER a brief full-precision bootstrap phase that
+# breaks metastable equilibria (specifically: the vdd/2 fixed point of an
+# odd-stage ring oscillator). bypass=1 in particular makes the metastable
+# fixed point numerically stable by skipping BSIM4 evaluations for non-
+# changing transistors, so loose options cannot be applied at the very
+# first timestep or oscillators get stuck.
 
 
 
@@ -518,8 +479,6 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 	top_level_testbench_lines.append(".include %s"
 			% SKY130_FD_SC_HD_CONSOLIDATED_SPICE_VIRTUAL_PATH_IN_WORKER)
 	top_level_testbench_lines.append_array(
-			PackedStringArray(NGSPICE_DOT_OPTION_LINES_FOR_DIGITAL_VISUALIZATION_PRESET))
-	top_level_testbench_lines.append_array(
 			PackedStringArray(SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH))
 	var raw_xschem_netlist_contained_a_dot_end_directive := false
 	for one_existing_line in raw_xschem_netlist_lines:
@@ -555,7 +514,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-W: bare '0' parses as pause; fallback IC seed on T-change")
+	print("[spice3d] BUILD-MARKER 2026-05-26-X: two-phase: full-precision bootstrap then loose run")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])

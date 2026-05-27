@@ -36,6 +36,25 @@ const EXTERNAL_VOLTAGE_SOURCE_RAMP_DURATION_SECONDS = 5e-12;
 const SIMULATION_TSTOP_FAR_BEYOND_ANY_SESSION_SECONDS = 1.0e-3;
 const INITIAL_CONDITION_SEED_HIGH_VOLTS = 1.8;
 const INITIAL_CONDITION_SEED_LOW_VOLTS = 0.0;
+const NUMBER_OF_SYNCHRONOUS_FULL_PRECISION_BOOTSTRAP_STEPS_AT_NETLIST_LOAD = 50;
+// Applied AFTER the bootstrap phase, never during it. ngspice's default
+// tolerances introduce enough Newton-iteration floating-point noise to
+// break the metastable vdd/2 fixed point of an odd-stage ring oscillator.
+// bypass=1 explicitly suppresses BSIM4 model re-evaluation for non-
+// changing transistors (bsim4/b4ld.c:509-603), so the metastable point
+// becomes numerically stable — the RO stays stuck unless we let some
+// real solver iterations run with bypass=0 first.
+const NGSPICE_OPTION_COMMANDS_FOR_LOOSE_RUN_PHASE = [
+	'option reltol=1e-2',
+	'option abstol=1e-8',
+	'option vntol=1e-3',
+	'option chgtol=1e-12',
+	'option trtol=50',
+	'option bypass=1',
+	'option gmin=1e-9',
+	'option itl4=200',
+	'option maxord=2',
+];
 
 let ngspiceWebAssemblyModule = null;
 let ngspiceSendCommand = null;
@@ -325,6 +344,31 @@ function loadAssembledDeckIntoNgspiceAndPrimeForChunking(initialConditionLines, 
 	ngspiceSendCommand('save none');
 }
 
+function applyLooseRunPhaseOptionsViaRuntimeCommands() {
+	for (const oneOptionCommand of NGSPICE_OPTION_COMMANDS_FOR_LOOSE_RUN_PHASE) {
+		ngspiceSendCommand(oneOptionCommand);
+	}
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'applied ' + NGSPICE_OPTION_COMMANDS_FOR_LOOSE_RUN_PHASE.length
+			+ ' loose-run-phase option overrides for the steady-state chunks');
+}
+
+function runSynchronousFullPrecisionBootstrapToBreakMetastableEquilibria() {
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'bootstrap: running step ' + NUMBER_OF_SYNCHRONOUS_FULL_PRECISION_BOOTSTRAP_STEPS_AT_NETLIST_LOAD
+			+ ' with ngspice default tolerances so floating-point noise can break RO metastability');
+	const wallClockMillisecondsBeforeBootstrap = (typeof performance !== 'undefined' && performance.now)
+			? performance.now() : Date.now();
+	ngspiceSendCommand('step ' + NUMBER_OF_SYNCHRONOUS_FULL_PRECISION_BOOTSTRAP_STEPS_AT_NETLIST_LOAD);
+	const wallClockMillisecondsAfterBootstrap = (typeof performance !== 'undefined' && performance.now)
+			? performance.now() : Date.now();
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'bootstrap: completed in '
+			+ (wallClockMillisecondsAfterBootstrap - wallClockMillisecondsBeforeBootstrap).toFixed(1)
+			+ ' ms; last observed sample t='
+			+ lastObservedSampleSimulationTimeSeconds.toExponential(3) + 's');
+}
+
 const MAXIMUM_CONSECUTIVE_ZERO_SAMPLE_CHUNKS_BEFORE_BAILING_OUT = 5;
 
 const THROUGHPUT_WARNING_WINDOW_MILLISECONDS = 5000;
@@ -442,6 +486,8 @@ function handleLoadNetlistMessage(incomingMessage) {
 	const seedInitialConditionLines = buildSeedInitialConditionLinesForInternalNets();
 	const useInitialConditionsFlag = seedInitialConditionLines.length > 0;
 	loadAssembledDeckIntoNgspiceAndPrimeForChunking(seedInitialConditionLines, useInitialConditionsFlag);
+	runSynchronousFullPrecisionBootstrapToBreakMetastableEquilibria();
+	applyLooseRunPhaseOptionsViaRuntimeCommands();
 	startContinuousChunkLoop();
 }
 
@@ -460,6 +506,7 @@ function handleSetTimeWarpMessage(incomingMessage) {
 	const effectiveInitialConditionLines = buildEffectiveInitialConditionLinesPreferringSnapshotElseFallingBackToAlternatingSeed();
 	const useInitialConditionsFlag = effectiveInitialConditionLines.length > 0;
 	loadAssembledDeckIntoNgspiceAndPrimeForChunking(effectiveInitialConditionLines, useInitialConditionsFlag);
+	applyLooseRunPhaseOptionsViaRuntimeCommands();
 	for (const oneSourceName of Object.keys(externalVoltageSourceStateByLowercaseName)) {
 		const oneSourceState = externalVoltageSourceStateByLowercaseName[oneSourceName];
 		oneSourceState.rampStartSimulatedTime = 0.0;
