@@ -22,6 +22,11 @@ const KNOWN_EXAMPLES_BY_DIRECTORY_NAME := {
 		"bundled_file_names": ["ro.sch"],
 		"pdk_family": "sky130",
 	},
+	"gf180mcu_nand2": {
+		"top_schematic_file_name": "gf180mcu_nand2.sch",
+		"bundled_file_names": ["gf180mcu_nand2.sch", "gf180mcu_button.sym"],
+		"pdk_family": "gf180mcu",
+	},
 }
 var active_example_directory_name: String = DEFAULT_EXAMPLE_DIRECTORY_NAME
 

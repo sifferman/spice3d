@@ -25,9 +25,12 @@ const GF180MCU_NETLIST_SPEC := {
 	"testbench_rail_voltage_definition_lines": [
 		"V_SPICE3D_TESTBENCH_VDD VDD 0 DC 5.0",
 		"V_SPICE3D_TESTBENCH_VSS VSS 0 DC 0",
+		"V_SPICE3D_TESTBENCH_VNW VNW 0 DC 5.0",
+		"V_SPICE3D_TESTBENCH_VPW VPW 0 DC 0",
 	],
 	"power_rail_names_never_treated_as_internal_nets": {
-		"vdd": true, "vss": true, "0": true, "gnd": true,
+		"vdd": true, "vss": true, "vnw": true, "vpw": true,
+		"0": true, "gnd": true,
 	},
 	"vdd_volts_for_external_voltage_source_high_level": 5.0,
 }
