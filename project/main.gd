@@ -78,17 +78,13 @@ const SKY130_CORS_PROXY_URL_PREFIX := "https://ciel-cors-proxy.sifferman.workers
 const SKY130_ARCHIVE_FILENAMES_TO_FETCH_AT_STARTUP := [
 	"common.tar.zst",
 	"sky130_fd_pr.tar.zst",
+	"sky130_fd_sc_hd.tar.zst",
 ]
 const SKY130_PATH_SUBSTRINGS_TO_KEEP_DURING_EXTRACTION := [
 	"/libs.tech/combined/",
 	"/libs.tech/xschem/",
 	"/libs.ref/sky130_fd_pr/spice/",
-]
-const SKY130_PDK_RES_BUNDLED_FILES_TO_STAGE_INTO_WORKER_FILESYSTEM := [
-	{
-		"res_path": "res://sky130_pdk_bundled/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
-		"worker_memfs_path": "/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
-	},
+	"/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
 ]
 
 
@@ -234,6 +230,7 @@ const SKY130_PDK_LIB_CORNER_NAME := "tt"
 const SKY130_PDK_SOURCE_SUBDIRECTORIES_RELATIVE_TO_CIEL_ROOT := [
 	"/sky130A/libs.tech/combined",
 	"/sky130A/libs.ref/sky130_fd_pr/spice",
+	"/sky130A/libs.ref/sky130_fd_sc_hd/spice",
 ]
 
 const SKY130_FD_SC_HD_CONSOLIDATED_SPICE_VIRTUAL_PATH_IN_WORKER := "/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice"
@@ -281,28 +278,7 @@ func stage_sky130_pdk_files_into_web_simulator_filesystem(
 				source_directory_absolute_path,
 				virtual_directory_inside_worker)
 		total_staged_file_count += staged_file_count_for_this_subdirectory
-	for one_bundled_file_entry in SKY130_PDK_RES_BUNDLED_FILES_TO_STAGE_INTO_WORKER_FILESYSTEM:
-		if stage_one_res_bundled_file_into_worker_filesystem(
-				spice3d_root_node,
-				one_bundled_file_entry["res_path"],
-				one_bundled_file_entry["worker_memfs_path"]):
-			total_staged_file_count += 1
 	print("[spice3d] staged %d sky130 PDK file(s) into worker MEMFS" % total_staged_file_count)
-
-
-func stage_one_res_bundled_file_into_worker_filesystem(
-		spice3d_root_node: Node,
-		res_bundled_file_path: String,
-		worker_memfs_destination_path: String) -> bool:
-	var bundled_file_handle := FileAccess.open(res_bundled_file_path, FileAccess.READ)
-	if bundled_file_handle == null:
-		push_error("[spice3d] cannot open bundled PDK file '%s' for reading" % res_bundled_file_path)
-		return false
-	var bundled_file_text_content := bundled_file_handle.get_as_text()
-	bundled_file_handle.close()
-	spice3d_root_node.install_file_text_in_web_simulator_filesystem(
-			worker_memfs_destination_path, bundled_file_text_content)
-	return true
 
 
 func stage_text_files_recursively_into_worker_filesystem(
