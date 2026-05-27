@@ -154,6 +154,17 @@ void Spice3DNode::_bind_methods() {
 					"keep_only_paths_containing_any_of_these_substrings"),
 			&Spice3DNode::extract_zstd_tar_archive_filtered_by_path_substring);
 	godot::ClassDB::bind_method(
+			godot::D_METHOD("begin_streaming_zstd_tar_extraction",
+					"filesystem_output_directory_absolute_path",
+					"keep_only_paths_containing_any_of_these_substrings"),
+			&Spice3DNode::begin_streaming_zstd_tar_extraction);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("feed_streaming_zstd_tar_compressed_chunk", "compressed_chunk_bytes"),
+			&Spice3DNode::feed_streaming_zstd_tar_compressed_chunk);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("finalize_streaming_zstd_tar_extraction"),
+			&Spice3DNode::finalize_streaming_zstd_tar_extraction);
+	godot::ClassDB::bind_method(
 			godot::D_METHOD("generate_spice_netlist_for_schematic_file",
 					"schematic_file_path",
 					"xschemrc_file_path",
@@ -254,6 +265,56 @@ godot::Dictionary Spice3DNode::extract_zstd_tar_archive_filtered_by_path_substri
 			godot_string_to_std_string(filesystem_output_directory_absolute_path),
 			path_substrings_to_keep_utf8);
 	godot::Dictionary result_dictionary;
+	result_dictionary["was_successful"] = extraction_result.was_successful;
+	result_dictionary["error_message"] = c_string_to_godot_string(extraction_result.error_message);
+	result_dictionary["extracted_file_count"] = extraction_result.extracted_file_count;
+	result_dictionary["total_bytes_written"] = extraction_result.total_bytes_written;
+	return result_dictionary;
+}
+
+bool Spice3DNode::begin_streaming_zstd_tar_extraction(
+		const godot::String &filesystem_output_directory_absolute_path,
+		const godot::PackedStringArray &keep_only_paths_containing_any_of_these_substrings) {
+	const std::vector<std::string> path_substrings_to_keep_utf8 =
+			packed_string_array_to_std_vector(keep_only_paths_containing_any_of_these_substrings);
+	active_streaming_zstd_tar_extractor = std::make_unique<ZstdTarStreamingExtractor>(
+			godot_string_to_std_string(filesystem_output_directory_absolute_path),
+			path_substrings_to_keep_utf8);
+	return true;
+}
+
+godot::Dictionary Spice3DNode::feed_streaming_zstd_tar_compressed_chunk(
+		const godot::PackedByteArray &compressed_chunk_bytes) {
+	godot::Dictionary result_dictionary;
+	if (!active_streaming_zstd_tar_extractor) {
+		result_dictionary["was_successful"] = false;
+		result_dictionary["error_message"] = godot::String(
+				"feed_streaming_zstd_tar_compressed_chunk called without an active extractor "
+				"(call begin_streaming_zstd_tar_extraction first)");
+		return result_dictionary;
+	}
+	std::string feed_error_message;
+	const bool feed_succeeded = active_streaming_zstd_tar_extractor->feed_compressed_chunk(
+			compressed_chunk_bytes.ptr(),
+			static_cast<std::size_t>(compressed_chunk_bytes.size()),
+			&feed_error_message);
+	result_dictionary["was_successful"] = feed_succeeded;
+	result_dictionary["error_message"] = c_string_to_godot_string(feed_error_message);
+	return result_dictionary;
+}
+
+godot::Dictionary Spice3DNode::finalize_streaming_zstd_tar_extraction() {
+	godot::Dictionary result_dictionary;
+	if (!active_streaming_zstd_tar_extractor) {
+		result_dictionary["was_successful"] = false;
+		result_dictionary["error_message"] = godot::String(
+				"finalize_streaming_zstd_tar_extraction called without an active extractor");
+		result_dictionary["extracted_file_count"] = 0;
+		result_dictionary["total_bytes_written"] = 0;
+		return result_dictionary;
+	}
+	const ZstdTarExtractionResult extraction_result = active_streaming_zstd_tar_extractor->finalize();
+	active_streaming_zstd_tar_extractor.reset();
 	result_dictionary["was_successful"] = extraction_result.was_successful;
 	result_dictionary["error_message"] = c_string_to_godot_string(extraction_result.error_message);
 	result_dictionary["extracted_file_count"] = extraction_result.extracted_file_count;

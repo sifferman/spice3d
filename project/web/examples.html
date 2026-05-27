@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>spice3d — example circuits</title>
+</head>
+<body>
+
+<h1>spice3d example circuits</h1>
+
+<p>
+Each link below opens the Godot simulator with the named example preloaded.
+The simulator starts paused until the PDK is fetched (first visit per PDK
+family downloads ~20&nbsp;MB into IndexedDB; cached afterwards).
+</p>
+
+<table border="1" cellpadding="6" cellspacing="0">
+  <thead>
+    <tr>
+      <th>Example</th>
+      <th>PDK family</th>
+      <th>V<sub>DD</sub></th>
+      <th>Interactive</th>
+      <th>Description</th>
+      <th>Open</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>button</code></td>
+      <td>sky130</td>
+      <td>1.8&nbsp;V</td>
+      <td>1 button</td>
+      <td>
+        One clickable button drives the input of a
+        <code>sky130_fd_sc_hd__inv_1</code> standard-cell inverter; the
+        output net <code>btn_out_n</code> visibly toggles in response.
+        Minimal end-to-end smoke test of the whole pipeline.
+      </td>
+      <td><a href="./#example=button">open &rarr;</a></td>
+    </tr>
+    <tr>
+      <td><code>ro</code></td>
+      <td>sky130</td>
+      <td>1.8&nbsp;V</td>
+      <td>none</td>
+      <td>
+        Five-stage ring oscillator built from <code>sky130_fd_sc_hd</code>
+        inverters. No inputs &mdash; wires light up in a rolling wave as
+        the loop self-oscillates. Stresses the continuous-step-N sim
+        path: nothing to click, just steady-state behavior.
+      </td>
+      <td><a href="./#example=ro">open &rarr;</a></td>
+    </tr>
+    <tr>
+      <td><code>gf180mcu_nand2</code></td>
+      <td>gf180mcu</td>
+      <td>5.0&nbsp;V</td>
+      <td>2 buttons (A1, A2)</td>
+      <td>
+        Transistor-level 2-input NAND built from <code>nfet_05v0</code>
+        and <code>pfet_05v0</code> primitives (no standard-cell wrapper).
+        Two clickable buttons drive the A1 and A2 inputs; the output net
+        <code>ZN</code> follows the NAND truth table. Adapted from
+        <a href="https://github.com/sifferman/gf180mcu_schematics/blob/main/schematics/nand2/gf180mcu_fd_sc_mcu7t5v0__nand2_1.sch">sifferman/gf180mcu_schematics</a>.
+      </td>
+      <td><a href="./#example=gf180mcu_nand2">open &rarr;</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>How to add an example</h2>
+
+<p>
+Drop a self-contained <code>.sch</code> (+ any custom <code>.sym</code> files)
+into <code>project/examples/&lt;name&gt;/</code>, register the directory in
+<code>KNOWN_EXAMPLES_BY_DIRECTORY_NAME</code> inside
+<code>project/main.gd</code>, then add a row to this table. The
+<code>pdk_family</code> field selects which PDK gets fetched &mdash; current
+options are <code>"sky130"</code> and <code>"gf180mcu"</code>.
+</p>
+
+<p>
+<a href="https://github.com/sifferman/spice3d">Source &mdash; sifferman/spice3d</a>
+&middot;
+<a href="./">Run the default example</a>
+</p>
+
+</body>
+</html>

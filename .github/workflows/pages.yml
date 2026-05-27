@@ -205,6 +205,9 @@ jobs:
       - name: Copy ngspice bridge + worker JS into the export
         run: cp project/web/*.js build-web/
 
+      - name: Copy sibling HTML pages (e.g. examples.html) into the export
+        run: cp project/web/*.html build-web/
+
       - name: Copy ngspice wasm artifacts into the export
         run: |
           set -euo pipefail

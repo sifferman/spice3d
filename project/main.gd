@@ -15,10 +15,17 @@ const KNOWN_EXAMPLES_BY_DIRECTORY_NAME := {
 	"button": {
 		"top_schematic_file_name": "button_test.sch",
 		"bundled_file_names": ["button_test.sch", "button.sym"],
+		"pdk_family": "sky130",
 	},
 	"ro": {
 		"top_schematic_file_name": "ro.sch",
 		"bundled_file_names": ["ro.sch"],
+		"pdk_family": "sky130",
+	},
+	"gf180mcu_nand2": {
+		"top_schematic_file_name": "gf180mcu_nand2.sch",
+		"bundled_file_names": ["gf180mcu_nand2.sch", "gf180mcu_button.sym"],
+		"pdk_family": "gf180mcu",
 	},
 }
 var active_example_directory_name: String = DEFAULT_EXAMPLE_DIRECTORY_NAME
@@ -34,6 +41,10 @@ func active_example_top_schematic_file_name() -> String:
 
 func active_example_bundled_file_names() -> Array:
 	return active_example_metadata()["bundled_file_names"]
+
+
+func active_example_pdk_family_name() -> String:
+	return active_example_metadata()["pdk_family"]
 
 
 func active_example_bundled_directory_path() -> String:
@@ -65,7 +76,6 @@ func resolve_active_example_directory_name_from_browser_url_hash_or_default() ->
 	return DEFAULT_EXAMPLE_DIRECTORY_NAME
 
 
-const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
 const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
 const WALL_CLOCK_SECONDS_BETWEEN_PLAYBACK_STEPS := 1.0 / float(TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK)
 const MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES: int = 60
@@ -111,27 +121,28 @@ func _ready() -> void:
 	var pdk_staging := PdkStaging.new()
 	add_child(pdk_staging)
 	stage_bundled_schematic_files_into_user_directory()
+	var pdk_family_name := active_example_pdk_family_name()
 	set_status_label_text_to_loading_phase("Fetching xschem device symbols")
 	await pdk_staging.ensure_xschem_devices_library_is_cached()
-	set_status_label_text_to_loading_phase("Resolving sky130 PDK release version")
-	var sky130_ciel_version := await pdk_staging.resolve_latest_sky130_ciel_version_from_manifest_with_fallback()
-	print("[spice3d] sky130 ciel version selected: %s" % sky130_ciel_version)
-	set_status_label_text_to_loading_phase("Downloading sky130 PDK (~20 MB)")
-	await pdk_staging.ensure_sky130_pdk_is_cached_using_extractor_node(spice3d_root_node, sky130_ciel_version)
+	set_status_label_text_to_loading_phase("Resolving %s PDK release version" % pdk_family_name)
+	var pdk_ciel_version := await pdk_staging.resolve_latest_pdk_ciel_version_from_manifest_with_fallback(pdk_family_name)
+	print("[spice3d] %s ciel version selected: %s" % [pdk_family_name, pdk_ciel_version])
+	set_status_label_text_to_loading_phase("Downloading %s PDK (~20 MB)" % pdk_family_name)
+	await pdk_staging.ensure_pdk_family_is_cached_using_extractor_node(spice3d_root_node, pdk_family_name, pdk_ciel_version)
 	set_status_label_text_to_loading_phase("Loading schematic")
 	var staged_top_schematic_absolute_path := absolute_path_for_staged_schematic_file(active_example_top_schematic_file_name())
-	var extra_symbol_search_directories := PackedStringArray([
-		PdkStaging.absolute_path_for_xschem_devices_library_directory(),
-		PdkStaging.absolute_path_for_sky130_xschem_library_directory_for_sky130a_variant(sky130_ciel_version),
-		PdkStaging.absolute_path_for_sky130_xschem_library_directory_for_sky130b_variant(sky130_ciel_version),
-	])
+	var extra_symbol_search_directories := PackedStringArray()
+	extra_symbol_search_directories.append(PdkStaging.absolute_path_for_xschem_devices_library_directory())
+	extra_symbol_search_directories.append_array(
+			PdkStaging.absolute_paths_for_all_pdk_xschem_library_directories(pdk_family_name, pdk_ciel_version))
 	var loaded_schematic := spice3d_root_node.load_schematic_and_render_into_node3d(
 			schematic_view,
 			staged_top_schematic_absolute_path,
 			"",
 			extra_symbol_search_directories)
 	set_status_label_text_to_loading_phase("Staging PDK into ngspice")
-	PdkStaging.stage_sky130_pdk_files_into_web_simulator_filesystem(spice3d_root_node, sky130_ciel_version)
+	PdkStaging.stage_pdk_family_files_into_web_simulator_filesystem(
+			spice3d_root_node, pdk_family_name, pdk_ciel_version)
 	set_status_label_text_to_loading_phase("Generating netlist + starting ngspice")
 	push_spice_netlist_and_start_transient_on_web_simulator(
 			spice3d_root_node,
@@ -187,6 +198,11 @@ func compute_transient_timestep_seconds_for_current_time_warp() -> float:
 			/ TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK)
 
 
+func active_example_supply_voltage_volts() -> float:
+	return XschemNetlistTransformer.netlist_spec_for(
+			active_example_pdk_family_name())["vdd_volts_for_external_voltage_source_high_level"]
+
+
 func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	if not is_simulator_ready_to_accept_button_clicks:
 		print("[spice3d] button '%s' click ignored — simulator is still loading" % button_instance_name)
@@ -196,9 +212,13 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	pressed_button_high_state_by_instance_name[button_instance_name] = new_high_state
 	print("[spice3d] button '%s' toggled %s" % [button_instance_name, "HIGH" if new_high_state else "LOW"])
 	if spice3d_root_node_for_sample_polling != null:
-		var new_voltage_for_button := VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL if new_high_state else 0.0
+		var new_voltage_for_button := active_example_supply_voltage_volts() if new_high_state else 0.0
 		spice3d_root_node_for_sample_polling.set_external_voltage_source_on_web_simulator(
 				button_instance_name, new_voltage_for_button)
+		var stale_pre_click_sample_count := queued_samples_awaiting_playback_to_wires.size()
+		queued_samples_awaiting_playback_to_wires.clear()
+		if stale_pre_click_sample_count > 0:
+			print("[spice3d] flushed %d pre-click playback sample(s) so the new voltage shows up immediately" % stale_pre_click_sample_count)
 
 
 func push_spice_netlist_and_start_transient_on_web_simulator(
@@ -211,17 +231,14 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	if netlist_lines.is_empty():
 		push_warning("[spice3d] netlist empty; skipping simulator push")
 		return
-	var netlist_lines_with_pdk_include := XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(netlist_lines)
-	var internal_net_names_to_seed_at_half_vdd := XschemNetlistTransformer.extract_internal_net_names_from_subckt_netlist(netlist_lines)
+	var pdk_family_name := active_example_pdk_family_name()
+	var netlist_lines_with_pdk_include := XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
+			netlist_lines, pdk_family_name)
+	var internal_net_names_to_seed_at_half_vdd := XschemNetlistTransformer.extract_internal_net_names_from_subckt_netlist(
+			netlist_lines, pdk_family_name)
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
-	print("[spice3d] ----- full testbench netlist sent to ngspice -----")
-	for one_testbench_line_index in netlist_lines_with_pdk_include.size():
-		print("[spice3d]   %02d | %s" % [
-			one_testbench_line_index,
-			netlist_lines_with_pdk_include[one_testbench_line_index]])
-	print("[spice3d] ----- end testbench netlist -----")
 	spice3d_root_node.push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
 			netlist_lines_with_pdk_include,
 			compute_transient_timestep_seconds_for_current_time_warp(),
@@ -342,7 +359,7 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_retur
 	spice3d_root_node_for_sample_polling.apply_node_voltages_to_wire_colors(
 			schematic_view,
 			node_voltages_by_name,
-			VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL)
+			active_example_supply_voltage_volts())
 	if is_first_played_back_sample_still_pending:
 		is_first_played_back_sample_still_pending = false
 		if spice3d_root_node_pending_ready_transition_on_first_sample != null:
