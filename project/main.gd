@@ -215,6 +215,10 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 		var new_voltage_for_button := active_example_supply_voltage_volts() if new_high_state else 0.0
 		spice3d_root_node_for_sample_polling.set_external_voltage_source_on_web_simulator(
 				button_instance_name, new_voltage_for_button)
+		var stale_pre_click_sample_count := queued_samples_awaiting_playback_to_wires.size()
+		queued_samples_awaiting_playback_to_wires.clear()
+		if stale_pre_click_sample_count > 0:
+			print("[spice3d] flushed %d pre-click playback sample(s) so the new voltage shows up immediately" % stale_pre_click_sample_count)
 
 
 func push_spice_netlist_and_start_transient_on_web_simulator(
