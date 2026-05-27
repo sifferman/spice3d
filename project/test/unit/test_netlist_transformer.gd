@@ -146,3 +146,26 @@ func test_gf180mcu_internal_net_extraction_treats_vdd_and_vss_as_rails_not_inter
 			"VSS is a power rail under the gf180mcu spec and must not be treated as internal.")
 	assert_false(internal_nets.has("gf180mcu_fd_sc_mcu7t5v0__inv_1"),
 			"PDK cell references must not be treated as internal nets.")
+
+
+func test_gf180mcu_internal_net_extraction_excludes_nfet_and_pfet_subckt_model_names() -> void:
+	var raw_xschem_emission := PackedStringArray([
+		".subckt example_top out",
+		"X_i_1 net1 A2 VSS VPW nfet_05v0 L=6e-07 W=8.2e-07",
+		"X_i_3 ZN A2 VDD VNW pfet_05v0 L=5e-07 W=1.13e-06",
+		".ends",
+	])
+	var internal_nets: PackedStringArray = XschemNetlistTransformer.extract_internal_net_names_from_subckt_netlist(
+			raw_xschem_emission, "gf180mcu")
+	assert_true(internal_nets.has("net1"),
+			"net1 is a real internal net and should be returned.")
+	assert_true(internal_nets.has("a2"),
+			"A2 is a real internal net (input wire) and should be returned.")
+	assert_true(internal_nets.has("zn"),
+			"ZN is a real internal net (output wire) and should be returned.")
+	assert_false(internal_nets.has("nfet_05v0"),
+			"nfet_05v0 is the subckt/model name (last positional token before params), "
+			+ "not a net — the nfet_ prefix in the gf180mcu spec must exclude it. "
+			+ "Otherwise it leaks into the seed-IC pass as a phantom .ic v(nfet_05v0)=...")
+	assert_false(internal_nets.has("pfet_05v0"),
+			"pfet_05v0 is the subckt name, not a net — pfet_ prefix in the gf180mcu spec must exclude it.")

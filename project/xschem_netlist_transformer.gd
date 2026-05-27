@@ -18,6 +18,9 @@ const SKY130_NETLIST_SPEC := {
 		"vpwr": true, "vgnd": true, "vpb": true, "vnb": true,
 		"0": true, "gnd": true, "vss": true, "vdd": true,
 	},
+	"token_prefixes_that_denote_a_model_or_subckt_name_not_an_internal_net": [
+		"sky130_",
+	],
 	"vdd_volts_for_external_voltage_source_high_level": 1.8,
 }
 
@@ -38,6 +41,11 @@ const GF180MCU_NETLIST_SPEC := {
 		"vdd": true, "vss": true, "vnw": true, "vpw": true,
 		"0": true, "gnd": true,
 	},
+	"token_prefixes_that_denote_a_model_or_subckt_name_not_an_internal_net": [
+		"gf180mcu_",
+		"nfet_",
+		"pfet_",
+	],
 	"vdd_volts_for_external_voltage_source_high_level": 5.0,
 }
 
@@ -90,13 +98,16 @@ static func looks_like_xschem_component_instance_line(stripped_lowercase_line: S
 
 
 static func token_looks_like_a_net_name_candidate(
-		one_token: String, power_rail_names_never_treated_as_internal_nets: Dictionary) -> bool:
+		one_token: String,
+		power_rail_names_never_treated_as_internal_nets: Dictionary,
+		model_or_subckt_name_prefixes: Array) -> bool:
 	if one_token.is_empty():
 		return false
 	if one_token.contains("="):
 		return false
-	if one_token.begins_with("sky130_") or one_token.begins_with("gf180mcu_"):
-		return false
+	for one_model_or_subckt_name_prefix in model_or_subckt_name_prefixes:
+		if one_token.begins_with(one_model_or_subckt_name_prefix):
+			return false
 	if one_token == "external":
 		return false
 	if one_token.is_valid_float():
@@ -111,6 +122,7 @@ static func extract_internal_net_names_from_subckt_netlist(
 		pdk_family_name: String) -> PackedStringArray:
 	var spec := netlist_spec_for(pdk_family_name)
 	var power_rail_names: Dictionary = spec["power_rail_names_never_treated_as_internal_nets"]
+	var model_or_subckt_name_prefixes: Array = spec["token_prefixes_that_denote_a_model_or_subckt_name_not_an_internal_net"]
 	var distinct_net_names_seen_so_far := {}
 	var ordered_internal_net_names := PackedStringArray()
 	for one_xschem_line in raw_xschem_netlist_lines:
@@ -122,7 +134,8 @@ static func extract_internal_net_names_from_subckt_netlist(
 			continue
 		for one_token_index in range(1, tokens_on_this_line.size()):
 			var one_token: String = tokens_on_this_line[one_token_index]
-			if not token_looks_like_a_net_name_candidate(one_token, power_rail_names):
+			if not token_looks_like_a_net_name_candidate(
+					one_token, power_rail_names, model_or_subckt_name_prefixes):
 				continue
 			if distinct_net_names_seen_so_far.has(one_token):
 				continue

@@ -29,24 +29,24 @@ C {symbols/nfet_05v0.sym} 100 90 0 0 {name=_i_1
 W=8.2e-07
 L=6e-07
 model=nfet_05v0
-spiceprefix=M
+spiceprefix=X
 }
 C {lab_pin.sym} 120 30 2 0 {name=p8 sig_type=std_logic lab=VPW}
 C {symbols/nfet_05v0.sym} 100 30 0 0 {name=_i_0
 W=8.2e-07
 L=6e-07
 model=nfet_05v0
-spiceprefix=M
+spiceprefix=X
 }
 C {symbols/pfet_05v0.sym} 180 -30 0 0 {name=_i_3
 W=1.13e-06
 L=5e-07
 model=pfet_05v0
-spiceprefix=M
+spiceprefix=X
 }
 C {symbols/pfet_05v0.sym} 20 -30 2 1 {name=_i_2
 W=1.13e-06
 L=5e-07
 model=pfet_05v0
-spiceprefix=M
+spiceprefix=X
 }
