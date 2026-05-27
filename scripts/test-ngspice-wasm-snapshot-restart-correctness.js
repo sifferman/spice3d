@@ -1,24 +1,9 @@
-// Isolated validation of the snapshot-and-restart pattern that the
-// proposed worker rewrite would use whenever the user changes time-warp
-// mid-session (changing TSTEP requires a tran restart per
-// spice3d_notes/notes/indefinite-ngspice.md §4).
-//
-// Hypothesis: at chunk K we can capture all node voltages from the
-// SendData callback, rebuild the netlist with `.ic v(node)=value` lines
-// appended, send the whole deck through ngSpice_Circ, issue `.tran ... uic`
-// plus `step 1`, and the first emitted sample should match the captured
-// voltages within solver-precision tolerance.
-//
-// Two assertions per node:
-//   1. First sample of the restarted run matches the snapshot value
-//      within RESTART_NODE_VOLTAGE_TOLERANCE_VOLTS. Catches `.ic` being
-//      ignored, UIC being skipped, or node-name mapping bugs.
-//   2. After N more samples on each branch, the control branch and the
-//      restart branch are within EVOLUTION_DIVERGENCE_TOLERANCE_VOLTS.
-//      Catches integration-history loss producing a permanent offset.
-//
-// Skips with exit code 0 if PDK_ROOT or the bundled FD_SC_HD spice file
-// is missing.
+// Verifies that snapshotting all node voltages from the SendData
+// callback, rebuilding the deck with .ic v(node)=value lines, and
+// reloading via ngSpice_Circ with `.tran ... uic` preserves the
+// circuit trajectory across the restart — both at steady state and
+// mid-transient (sim-time-aligned). Skips with exit code 0 if
+// PDK_ROOT or the bundled FD_SC_HD spice file is missing.
 
 const fs = require('fs');
 const path = require('path');

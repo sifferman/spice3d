@@ -159,7 +159,7 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 	queued_samples_awaiting_playback_to_wires.clear()
 	if discarded_old_pace_sample_count > 0:
 		print("[spice3d] discarded %d queued sample(s) from previous time-warp setting" % discarded_old_pace_sample_count)
-	if currently_selected_time_warp_simulated_seconds_per_real_second == 0.0:
+	if currently_selected_time_warp_simulated_seconds_per_real_second == TIME_WARP_INPUT_PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND:
 		print("[spice3d] time-warp set to 0 — simulation paused; wires hold last displayed state")
 		if spice3d_root_node_for_sample_polling != null:
 			spice3d_root_node_for_sample_polling.halt_simulation_on_web_simulator()
@@ -172,13 +172,13 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 				compute_transient_timestep_seconds_for_current_time_warp())
 
 
+const TIME_WARP_INPUT_PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND := 0.0
+
+
 func parse_time_warp_input_text_to_simulated_seconds_per_real_second(input_text: String) -> float:
 	var trimmed_lowercase_text := input_text.strip_edges().to_lower().replace("µ", "u")
-	# Bare "0" / "0.0" with no unit suffix is the pause sentinel — multiplying
-	# any unit by zero produces zero, so the unit is irrelevant for this case
-	# and forcing the user to type "0 ps" specifically would be annoying.
 	if trimmed_lowercase_text.is_valid_float() and trimmed_lowercase_text.to_float() == 0.0:
-		return 0.0
+		return TIME_WARP_INPUT_PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND
 	var unit_multiplier_in_seconds := 0.0
 	if trimmed_lowercase_text.ends_with("ps"):
 		unit_multiplier_in_seconds = 1.0e-12
@@ -195,8 +195,6 @@ func parse_time_warp_input_text_to_simulated_seconds_per_real_second(input_text:
 	var numeric_value: float = numeric_text_without_unit_suffix.to_float()
 	if numeric_value < 0.0 or numeric_value > TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE:
 		return NAN
-	# numeric_value == 0 is a deliberate "pause" sentinel — main.gd halts the
-	# worker chunk loop in this case so the queue doesn't keep filling up.
 	return numeric_value * unit_multiplier_in_seconds
 
 
@@ -221,15 +219,7 @@ const VDD_VOLTS_FOR_BUTTON_HIGH_LEVEL := 1.8
 const TIME_WARP_NOMINAL_NUMBER_OF_SAMPLES_PER_WALL_SECOND_OF_PLAYBACK := 30
 const MAXIMUM_PLAYBACK_QUEUE_SIZE_BEFORE_DROPPING_OLDEST_SAMPLES: int = 60
 
-# How much simulated time advances per second of wall clock — user-controlled
-# via the TimeWarpInput LineEdit at the bottom of the screen. The user types
-# "<positive number up to 1000> <ps|ns|us>" (e.g. "250 ns") and on submit
-# we recompute the wall-clock spacing between sample-playback steps so the
-# fixed-size ngspice tran replays at the chosen pace.
 const TIME_WARP_INPUT_MAXIMUM_NUMERIC_VALUE := 1000.0
-# Picked so a sky130 stdcell's ~30 ps tpd unfolds over ~300 ms wall — clearly
-# visible at 60 fps without being agonizingly slow. At the previous default
-# of 1 ns/s the same transient compressed into ~1 frame and read as a step.
 const TIME_WARP_DEFAULT_INPUT_TEXT := "100 ps"
 const TIME_WARP_DEFAULT_SIMULATED_SECONDS_PER_REAL_SECOND := 100.0e-12
 
@@ -356,16 +346,6 @@ const SKY130_PDK_RAIL_VOLTAGE_DEFINITIONS_FOR_TESTBENCH := [
 	"V_SPICE3D_TESTBENCH_VNB  VNB  0 DC 0",
 ]
 
-# Solver-tolerance preset moved to project/web/ngspice_worker.js so the
-# worker can apply it AFTER a brief full-precision bootstrap phase that
-# breaks metastable equilibria (specifically: the vdd/2 fixed point of an
-# odd-stage ring oscillator). bypass=1 in particular makes the metastable
-# fixed point numerically stable by skipping BSIM4 evaluations for non-
-# changing transistors, so loose options cannot be applied at the very
-# first timestep or oscillators get stuck.
-
-
-
 
 func strip_xschem_escape_backslashes_from_subckt_names(spice_netlist_line: String) -> String:
 	if spice_netlist_line.find("\\") == -1: return spice_netlist_line
@@ -448,18 +428,9 @@ func extract_internal_net_names_from_xschem_subckt_netlist(
 
 
 func strip_empty_parameter_assignments_from_one_spice_line(spice_line: String) -> String:
-	# xschem2spice emits raw sky130_fd_pr device instances with blank-valued
-	# parameter tokens like `ad= as= pd= ps= nrd= nrs= sa= sb= sd=`. These are
-	# meant to be filled in by xschem's symbol-property templates, but for the
-	# sky130_fd_pr/nfet_01v8.sym and pfet_01v8_hvt.sym symbols the templates
-	# leave them empty when the schematic doesn't override the defaults. ngspice
-	# can't parse `ad=` (no value): it treats the next token as the assigned
-	# expression, chaining `ad=as=(pd=(ps=...))` until something undefined like
-	# `nrd` aborts the Formula() evaluator. Stripping the empty assignments
-	# lets the model fall back to its built-in BSIM4 defaults, which are fine
-	# for digital simulation. When the line is a `+`-continuation that ends up
-	# with no content after stripping, drop it entirely so we don't ship a
-	# meaningless naked `+` to ngspice.
+	# xschem2spice emits empty `<param>=` tokens for sky130_fd_pr cell template
+	# slots; ngspice would otherwise consume the next token as the value and
+	# build a runaway nested expression like `ad=as=(pd=(ps=...))`.
 	var output_tokens := PackedStringArray()
 	for one_token in spice_line.split(" ", false):
 		if one_token.ends_with("="):
@@ -484,11 +455,6 @@ func convert_xschem_subckt_netlist_into_top_level_testbench(
 	for one_existing_line in raw_xschem_netlist_lines:
 		if is_subckt_wrapper_directive(one_existing_line):
 			continue
-		# Hold back `.end` so we can append FO4 output-load caps *before* it.
-		# ngspice's netlist parser stops at the first `.end`, so any cap line
-		# placed after `.end` is silently ignored. But omitting `.end` entirely
-		# leaves the circuit uncommitted ("no circuit loaded" at `run` time).
-		# So we keep `.end` and just re-order: caps first, then `.end`.
 		if one_existing_line.strip_edges() == ".end":
 			raw_xschem_netlist_contained_a_dot_end_directive = true
 			continue
@@ -514,7 +480,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var netlist_lines_with_pdk_include := convert_xschem_subckt_netlist_into_top_level_testbench(netlist_lines)
 	var internal_net_names_to_seed_at_half_vdd := extract_internal_net_names_from_xschem_subckt_netlist(netlist_lines)
-	print("[spice3d] BUILD-MARKER 2026-05-26-X: two-phase: full-precision bootstrap then loose run")
+	print("[spice3d] BUILD-MARKER 2026-05-26-Y: pre-merge cleanup pass")
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
@@ -639,10 +605,6 @@ func step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_retur
 	var wall_clock_seconds_per_sample_interval: float = compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
 	if wall_clock_seconds_accumulated_since_last_playback_step < wall_clock_seconds_per_sample_interval:
 		return 0
-	# Subtract the interval instead of resetting to 0 so the fractional remainder
-	# carries forward; otherwise at 90 fps (delta ≈ 11 ms, interval = 33 ms) the
-	# accumulator hits threshold partway through every 3rd frame, pops, and
-	# discards ~11 ms of wall time — yielding ~22 samples/s instead of 30/s.
 	wall_clock_seconds_accumulated_since_last_playback_step -= wall_clock_seconds_per_sample_interval
 	if queued_samples_awaiting_playback_to_wires.is_empty():
 		return 0

@@ -1,19 +1,6 @@
-// Measures the wall-clock cost of the snapshot+restart cycle that the
-// worker rewrite would perform on every user-initiated time-warp change.
-//
-// Reports four phases per cycle:
-//   1. snapshot_capture: read all node voltages from the most recent
-//      SendData payload (already in JS, just a copy).
-//   2. deck_assembly: build the new netlist line array with the .ic
-//      lines appended.
-//   3. circ_reload: call ngSpice_Circ with the new deck.
-//   4. first_post_restart_step: `step 1` so the IC actually takes effect
-//      and we get the first sample of the continued trajectory.
-//
-// Repeats for two circuit sizes (single inverter, 9-stage RO) so the per-
-// cycle cost can be compared to the user's perceptible-latency budget
-// (target: <50 ms, i.e. < 3 render frames at 60 fps).
-//
+// Measures snapshot+restart wall-clock latency across two circuit sizes
+// (single inverter, 9-stage RO). Reports per-phase timing breakdown and
+// asserts the worst-case cycle stays within PER_CYCLE_BUDGET_MILLISECONDS.
 // Skips with exit code 0 if PDK_ROOT or the bundled FD_SC_HD spice file
 // is missing.
 

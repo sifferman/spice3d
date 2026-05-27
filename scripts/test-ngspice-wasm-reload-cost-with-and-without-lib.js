@@ -1,20 +1,7 @@
-// Isolates how much of ngSpice_Circ's per-reload wall-clock cost comes
-// from re-parsing the sky130 .lib + sky130_fd_sc_hd.spice include chain
-// vs the rest of the circuit-init work. We reload twice per condition
-// to also see whether per-cycle growth happens regardless of payload.
-//
-// Conditions:
-//   A. minimal-deck-no-lib: 2 resistors + 1 vdc source. No .lib, no
-//      .include, no transistors, no PDK touch at all.
-//   B. full-pdk-inverter: same single-inverter testbench as the perf
-//      test — with the full sky130.lib.spice chain.
-//
-// If A is fast and B is slow, the cost is in .lib/.include processing.
-// If both are slow, the cost is elsewhere (e.g. ngspice's circuit
-// teardown/setup).
-//
-// Skips with exit code 0 if PDK_ROOT or the bundled FD_SC_HD spice file
-// is missing.
+// A/B comparison of ngSpice_Circ reload latency: minimal deck (no .lib /
+// no .include / no transistors) versus the full sky130 PDK inverter
+// testbench. Skips with exit code 0 if PDK_ROOT or the bundled FD_SC_HD
+// spice file is missing.
 
 const fs = require('fs');
 const path = require('path');

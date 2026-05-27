@@ -4,7 +4,7 @@ extends GutTest
 # Integration test for main.gd's sample-playback pacing. The unit tests
 # in test_time_warp_math_and_parser.gd validate the timestep + interval
 # *formulas* in isolation. This file validates that
-# step_sample_playback_queue_forward_if_wall_clock_interval_elapsed
+# step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count
 # actually drains the queue at the rate those formulas promise — and
 # that the per-click total wall time scales correctly with T.
 #
@@ -59,7 +59,7 @@ func test_playback_step_does_not_drain_when_accumulated_delta_is_below_interval(
 	var expected_interval: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
 	push_fake_sample_into_queue(0.0)
 	push_fake_sample_into_queue(1.0e-12)
-	loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(expected_interval * 0.5)
+	loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(expected_interval * 0.5)
 	assert_eq(loaded_main_script_instance.queued_samples_awaiting_playback_to_wires.size(), 2,
 			"step() must not drain a sample when accumulated delta is below the per-sample interval.")
 
@@ -69,7 +69,7 @@ func test_playback_step_drains_one_sample_when_accumulated_delta_crosses_interva
 	var expected_interval: float = loaded_main_script_instance.compute_wall_clock_seconds_between_sample_playback_steps_for_current_time_warp()
 	push_fake_sample_into_queue(0.0)
 	push_fake_sample_into_queue(1.0e-12)
-	loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(expected_interval * 1.01)
+	loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(expected_interval * 1.01)
 	assert_eq(loaded_main_script_instance.queued_samples_awaiting_playback_to_wires.size(), 1,
 			"step() must drain exactly one sample when accumulated delta crosses the per-sample interval.")
 
@@ -83,7 +83,7 @@ func test_playback_drains_all_samples_after_n_interval_long_steps() -> void:
 	for one_sample_index in sample_count:
 		push_fake_sample_into_queue(one_sample_index * 1.0e-12)
 	for _one_step_index in sample_count:
-		loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed(expected_interval * 1.01)
+		loaded_main_script_instance.step_sample_playback_queue_forward_if_wall_clock_interval_elapsed_and_return_count(expected_interval * 1.01)
 	assert_eq(loaded_main_script_instance.queued_samples_awaiting_playback_to_wires.size(), 0,
 			"%d step() calls with delta = 1.01 * interval should drain all %d queued samples." % [
 				sample_count, sample_count])

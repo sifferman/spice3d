@@ -1,21 +1,9 @@
-// Isolated verification of ngspice's `tran <step> <huge_stop> 0 <step>` +
-// repeated `step N` mechanism. This is the prerequisite for the proposed
-// continuous-simulation worker rewrite — before changing production code we
-// need ground truth that ngspice actually behaves the way the source-code
-// reading in spice3d_notes/notes/indefinite-ngspice.md claims it does.
-//
-// Asserts:
-//   1. After `tran ... ; step N`, exactly N samples are emitted.
-//   2. A subsequent `step M` emits exactly M more samples (no restart).
-//   3. The simulation time across all chunks is strictly monotonically
-//      increasing — no CKTtime=0 reset between chunks.
-//   4. The first sample of chunk K+1 starts where chunk K ended (continuity
-//      within solver-step tolerance, no IC re-solve).
-//   5. A voltage-source change applied between two `step` calls takes effect
-//      on the very next solver step (no `tran` restart required).
-//
-// Skips with exit code 0 if PDK_ROOT or the bundled FD_SC_HD spice file is
-// missing, same convention as test-ngspice-wasm-button-toggle-end-to-end.js.
+// Verifies ngspice's `.tran ... ; step N ; step M ; ...` chunking
+// mechanism: each chunk emits its N samples, ci_inprogress stays TRUE
+// between chunks, CKTtime advances continuously, and a voltage-source
+// change between two `step` calls takes effect on the next solver step.
+// Skips with exit code 0 if PDK_ROOT or the bundled FD_SC_HD spice file
+// is missing.
 
 const fs = require('fs');
 const path = require('path');
