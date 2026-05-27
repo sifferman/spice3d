@@ -122,8 +122,8 @@ func test_gf180mcu_spec_produces_5v_rails_and_correct_lib_path() -> void:
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
 			raw_xschem_emission, "gf180mcu")
 	var single_blob_for_inspection := "\n".join(converted_lines)
-	assert_true(single_blob_for_inspection.contains(".lib /gf180mcuD/libs.tech/combined/gf180mcu.lib.spice typical"),
-			"gf180mcu testbench must reference the gf180mcuD top-level .lib at the typical corner.")
+	assert_true(single_blob_for_inspection.contains(".lib /gf180mcuD/libs.tech/ngspice/sm141064.spice typical"),
+			"gf180mcu testbench must reference the gf180mcuD ngspice/sm141064.spice .lib at the typical corner.")
 	assert_true(single_blob_for_inspection.contains("V_SPICE3D_TESTBENCH_VDD VDD 0 DC 5.0"),
 			"gf180mcu mcu7t5v0 cells are 5V parts — the testbench must drive VDD to 5.0 V.")
 	assert_false(single_blob_for_inspection.contains(".include /sky130A/"),

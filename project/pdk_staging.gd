@@ -42,23 +42,20 @@ const GF180MCU_FAMILY_SPEC := {
 	"name": "gf180mcu",
 	"variants_to_expose_xschem_libraries_for": ["gf180mcuA", "gf180mcuB", "gf180mcuC", "gf180mcuD"],
 	"ciel_manifest_url": "https://www-archive.fossi-foundation.org/ciel-releases/gf180mcu/manifest.json",
-	"ciel_fallback_version_if_manifest_unreachable": "",
+	"ciel_fallback_version_if_manifest_unreachable": "61a056e180dac7dcc6d4eb7529e2231f95105746",
 	"ciel_github_release_tag_prefix": "gf180mcu-",
 	"ciel_github_release_repo": "fossi-foundation/ciel-releases",
 	"archive_filenames_to_fetch_at_startup": [
 		"common.tar.zst",
-		"gf180mcu_fd_pr.tar.zst",
 		"gf180mcu_fd_sc_mcu7t5v0.tar.zst",
 	],
 	"archive_path_substrings_to_keep_during_extraction": [
-		"/libs.tech/combined/",
+		"/libs.tech/ngspice/",
 		"/libs.tech/xschem/",
-		"/libs.ref/gf180mcu_fd_pr/spice/",
 		"/libs.ref/gf180mcu_fd_sc_mcu7t5v0/spice/",
 	],
 	"pdk_source_subdirectories_relative_to_ciel_root_to_stage_into_worker": [
-		"/gf180mcuD/libs.tech/combined",
-		"/gf180mcuD/libs.ref/gf180mcu_fd_pr/spice",
+		"/gf180mcuD/libs.tech/ngspice",
 		"/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/spice",
 	],
 }

@@ -19,7 +19,7 @@ const SKY130_NETLIST_SPEC := {
 }
 
 const GF180MCU_NETLIST_SPEC := {
-	"top_level_lib_spice_virtual_path_in_worker": "/gf180mcuD/libs.tech/combined/gf180mcu.lib.spice",
+	"top_level_lib_spice_virtual_path_in_worker": "/gf180mcuD/libs.tech/ngspice/sm141064.spice",
 	"lib_corner_name": "typical",
 	"consolidated_stdcell_include_path_in_worker": "",
 	"testbench_rail_voltage_definition_lines": [
