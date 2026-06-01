@@ -403,27 +403,18 @@ func fetch_verify_and_extract_one_pdk_archive_via_streaming_on_web(
 	incremental_sha256.start(HashingContext.HASH_SHA256)
 	var total_chunk_bytes_fed := 0
 	while true:
-		var bridge_returned_envelope: Variant = JavaScriptBridge.eval(
+		var bridge_returned_envelope_as_string: String = JavaScriptBridge.eval(
 				"globalThis.spice3d && globalThis.spice3d.takeNextStreamingChunkAsJsonStatusEnvelope()", true)
-		if not (bridge_returned_envelope is String):
-			push_error("%s %s streaming download: bridge returned non-string" % [
-					pdk_family_name, archive_filename])
-			abort_streaming_extraction(spice3d_root_node)
-			return false
-		var parsed_envelope: Variant = JSON.parse_string(bridge_returned_envelope)
-		if not (parsed_envelope is Dictionary):
-			push_error("%s %s streaming download: bridge envelope did not parse as JSON" % [
-					pdk_family_name, archive_filename])
-			abort_streaming_extraction(spice3d_root_node)
-			return false
+		var parsed_envelope: Dictionary = JSON.parse_string(bridge_returned_envelope_as_string)
 		var status_field: String = parsed_envelope.get("status", "")
 		if status_field == "chunk":
 			var chunk_bytes: PackedByteArray = Marshalls.base64_to_raw(parsed_envelope["base64ChunkBody"])
 			incremental_sha256.update(chunk_bytes)
 			var feed_result: Dictionary = spice3d_root_node.feed_streaming_zstd_tar_compressed_chunk(chunk_bytes)
 			if not feed_result["was_successful"]:
-				push_error("%s %s streaming extraction failed: %s" % [
-						pdk_family_name, archive_filename, str(feed_result.get("error_message", ""))])
+				push_error("%s %s streaming extraction failed after %d bytes fed: %s" % [
+						pdk_family_name, archive_filename, total_chunk_bytes_fed,
+						str(feed_result["error_message"])])
 				abort_streaming_extraction(spice3d_root_node)
 				return false
 			total_chunk_bytes_fed += chunk_bytes.size()

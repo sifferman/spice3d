@@ -259,11 +259,15 @@ function buildAlternatingHighLowInitialConditionLinesForInternalNets() {
 
 function buildSnapshotInitialConditionLinesFromLastObservedSample() {
 	const snapshotInitialConditionLines = [];
+	let skippedBranchCurrentPseudoNodeCount = 0;
 	for (const oneNodeName of Object.keys(lastObservedNodeVoltagesByName)) {
 		if (oneNodeName === 'time' || oneNodeName === '0') continue;
-		if (oneNodeName.indexOf('#') !== -1) continue;
+		if (oneNodeName.endsWith('#branch')) { skippedBranchCurrentPseudoNodeCount++; continue; }
 		snapshotInitialConditionLines.push('.ic v(' + oneNodeName + ')=' + lastObservedNodeVoltagesByName[oneNodeName]);
 	}
+	postNgspiceDiagnosticMessage('WorkerDiag',
+			'snapshot built: ' + snapshotInitialConditionLines.length + ' .ic lines, '
+			+ skippedBranchCurrentPseudoNodeCount + ' branch-current pseudo-nodes skipped');
 	return snapshotInitialConditionLines;
 }
 

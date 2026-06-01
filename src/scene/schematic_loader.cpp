@@ -142,6 +142,7 @@ WireSegment make_wire_segment(const xs_wire &xschem_wire) {
 	wire.end_x = xschem_wire.x2;
 	wire.end_y = xschem_wire.y2;
 	wire.net_label = read_property_value_or_empty(xschem_wire.prop_block, "lab");
+	wire.is_bus = xschem_wire.is_bus != 0;
 	return wire;
 }
 

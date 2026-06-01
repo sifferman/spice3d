@@ -12,6 +12,7 @@ struct WireSegment {
 	double end_x = 0.0;
 	double end_y = 0.0;
 	std::string net_label;
+	bool is_bus = false;
 };
 
 struct ComponentPin {

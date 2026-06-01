@@ -50,6 +50,7 @@ constexpr double TEXT_PIXEL_SIZE_PER_XSCHEM_VERTICAL_SIZE_FACTOR = 0.6;
 constexpr double FILLED_DRAWING_EXTRUSION_HEIGHT_IN_WORLD_UNITS = 4.0;
 
 const char *WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME = "spice_node_name";
+const char *WIRE_MESH_INSTANCE_META_KEY_FOR_BUS_BIT_NET_NAMES_MSB_FIRST = "bus_bit_net_names_msb_first";
 
 const std::string SYMBOL_TYPE_NAME_FOR_BUTTON_COMPONENTS = "vsource";
 constexpr double BUTTON_AREA_COLLISION_SHAPE_VERTICAL_EXTENT_IN_WORLD_UNITS = 8.0;
@@ -194,6 +195,54 @@ godot::String build_spice_node_name_from_xschem_net_label(const std::string &xsc
 	return c_string_to_godot_string(normalized);
 }
 
+godot::PackedStringArray expand_xschem_bus_label_to_scalar_net_names_msb_first(
+		const std::string &bus_label) {
+	godot::PackedStringArray scalar_net_names_msb_first;
+	const auto left_bracket_position = bus_label.find('[');
+	if (left_bracket_position == std::string::npos) return scalar_net_names_msb_first;
+	const auto right_bracket_position = bus_label.find(']', left_bracket_position + 1);
+	if (right_bracket_position == std::string::npos
+			|| right_bracket_position <= left_bracket_position + 1) {
+		return scalar_net_names_msb_first;
+	}
+	const std::string range_inside_brackets = bus_label.substr(
+			left_bracket_position + 1,
+			right_bracket_position - left_bracket_position - 1);
+	const std::string bus_base_name = bus_label.substr(0, left_bracket_position);
+	int high_bit_index = 0;
+	int low_bit_index = 0;
+	bool brackets_kept_in_scalar_form = false;
+	if (std::sscanf(range_inside_brackets.c_str(), "%d:%d",
+			&high_bit_index, &low_bit_index) == 2) {
+		brackets_kept_in_scalar_form = true;
+	} else if (std::sscanf(range_inside_brackets.c_str(), "%d..%d",
+			&high_bit_index, &low_bit_index) == 2) {
+		brackets_kept_in_scalar_form = false;
+	} else {
+		return scalar_net_names_msb_first;
+	}
+	const int step_from_high_to_low = (high_bit_index >= low_bit_index) ? -1 : 1;
+	int current_bit_index = high_bit_index;
+	while (true) {
+		char one_scalar_buffer[256];
+		if (brackets_kept_in_scalar_form) {
+			std::snprintf(one_scalar_buffer, sizeof one_scalar_buffer,
+					"%s[%d]", bus_base_name.c_str(), current_bit_index);
+		} else {
+			std::snprintf(one_scalar_buffer, sizeof one_scalar_buffer,
+					"%s%d", bus_base_name.c_str(), current_bit_index);
+		}
+		std::string lowercased_scalar_net_name(one_scalar_buffer);
+		std::transform(lowercased_scalar_net_name.begin(), lowercased_scalar_net_name.end(),
+				lowercased_scalar_net_name.begin(),
+				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		scalar_net_names_msb_first.append(godot::String(lowercased_scalar_net_name.c_str()));
+		if (current_bit_index == low_bit_index) break;
+		current_bit_index += step_from_high_to_low;
+	}
+	return scalar_net_names_msb_first;
+}
+
 godot::Ref<godot::StandardMaterial3D> build_wire_render_material_with_independent_albedo() {
 	godot::Ref<godot::StandardMaterial3D> material;
 	material.instantiate();
@@ -227,9 +276,17 @@ void add_wire_segment_capsule_to_parent_node(
 	wire_transform.basis = basis_aligning_local_y_axis_with_xz_plane_direction(segment_direction_in_world);
 	wire_transform.origin = (start_world_point + end_world_point) * 0.5;
 	wire_mesh_instance->set_transform(wire_transform);
-	wire_mesh_instance->set_meta(
-			WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME,
-			build_spice_node_name_from_xschem_net_label(wire.net_label));
+	if (wire.is_bus) {
+		const godot::PackedStringArray bit_net_names_msb_first =
+				expand_xschem_bus_label_to_scalar_net_names_msb_first(wire.net_label);
+		wire_mesh_instance->set_meta(
+				WIRE_MESH_INSTANCE_META_KEY_FOR_BUS_BIT_NET_NAMES_MSB_FIRST,
+				bit_net_names_msb_first);
+	} else {
+		wire_mesh_instance->set_meta(
+				WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME,
+				build_spice_node_name_from_xschem_net_label(wire.net_label));
+	}
 	parent_node->add_child(wire_mesh_instance);
 }
 
@@ -711,22 +768,76 @@ godot::Color interpolate_voltage_into_wire_color(double voltage_volts, double vd
 	return low_color.lerp(high_color, saturation_factor);
 }
 
-void update_one_wire_mesh_albedo_from_voltage(
+godot::Color bus_integer_value_to_distinct_state_color(int integer_value, int bit_count) {
+	const int distinct_state_count = (bit_count > 0) ? (1 << bit_count) : 1;
+	const double hue_around_color_wheel = static_cast<double>(integer_value)
+			/ static_cast<double>(distinct_state_count);
+	godot::Color one_distinct_state_color;
+	one_distinct_state_color.set_hsv(static_cast<float>(hue_around_color_wheel), 0.85f, 0.95f);
+	return one_distinct_state_color;
+}
+
+void apply_albedo_and_emission_color_to_wire_mesh(
+		godot::MeshInstance3D *wire_mesh_instance,
+		const godot::Color &color_to_apply) {
+	godot::Ref<godot::StandardMaterial3D> wire_material = wire_mesh_instance->get_material_override();
+	if (wire_material.is_null()) return;
+	wire_material->set_albedo(color_to_apply);
+	wire_material->set_emission(color_to_apply * 0.4f);
+}
+
+void update_one_scalar_wire_mesh_albedo_from_voltage(
 		godot::MeshInstance3D *wire_mesh_instance,
 		const godot::Dictionary &spice_node_name_to_voltage,
 		double vdd_volts) {
-	if (!wire_mesh_instance->has_meta(WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME)) return;
 	const godot::Variant meta_value = wire_mesh_instance->get_meta(
 			WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME);
 	if (meta_value.get_type() != godot::Variant::STRING) return;
 	const godot::String spice_node_name = static_cast<godot::String>(meta_value);
 	if (!spice_node_name_to_voltage.has(spice_node_name)) return;
 	const double voltage_volts = static_cast<double>(spice_node_name_to_voltage[spice_node_name]);
-	const godot::Color updated_albedo_color = interpolate_voltage_into_wire_color(voltage_volts, vdd_volts);
-	godot::Ref<godot::StandardMaterial3D> wire_material = wire_mesh_instance->get_material_override();
-	if (wire_material.is_null()) return;
-	wire_material->set_albedo(updated_albedo_color);
-	wire_material->set_emission(updated_albedo_color * 0.4f);
+	apply_albedo_and_emission_color_to_wire_mesh(
+			wire_mesh_instance, interpolate_voltage_into_wire_color(voltage_volts, vdd_volts));
+}
+
+void update_one_bus_wire_mesh_albedo_from_per_bit_voltages(
+		godot::MeshInstance3D *wire_mesh_instance,
+		const godot::Dictionary &spice_node_name_to_voltage,
+		double vdd_volts) {
+	const godot::Variant meta_value = wire_mesh_instance->get_meta(
+			WIRE_MESH_INSTANCE_META_KEY_FOR_BUS_BIT_NET_NAMES_MSB_FIRST);
+	if (meta_value.get_type() != godot::Variant::PACKED_STRING_ARRAY) return;
+	const godot::PackedStringArray bit_net_names_msb_first = meta_value;
+	const int bit_count = bit_net_names_msb_first.size();
+	if (bit_count <= 0) return;
+	const double bit_threshold_volts = 0.5 * vdd_volts;
+	int aggregated_integer_value = 0;
+	for (int one_bit_index_from_msb = 0; one_bit_index_from_msb < bit_count; ++one_bit_index_from_msb) {
+		const godot::String one_bit_net_name = bit_net_names_msb_first[one_bit_index_from_msb];
+		if (!spice_node_name_to_voltage.has(one_bit_net_name)) return;
+		const double one_bit_voltage_volts = static_cast<double>(
+				spice_node_name_to_voltage[one_bit_net_name]);
+		const int one_bit_digital_value = (one_bit_voltage_volts > bit_threshold_volts) ? 1 : 0;
+		aggregated_integer_value = (aggregated_integer_value << 1) | one_bit_digital_value;
+	}
+	apply_albedo_and_emission_color_to_wire_mesh(
+			wire_mesh_instance,
+			bus_integer_value_to_distinct_state_color(aggregated_integer_value, bit_count));
+}
+
+void update_one_wire_mesh_albedo_from_voltage(
+		godot::MeshInstance3D *wire_mesh_instance,
+		const godot::Dictionary &spice_node_name_to_voltage,
+		double vdd_volts) {
+	if (wire_mesh_instance->has_meta(WIRE_MESH_INSTANCE_META_KEY_FOR_BUS_BIT_NET_NAMES_MSB_FIRST)) {
+		update_one_bus_wire_mesh_albedo_from_per_bit_voltages(
+				wire_mesh_instance, spice_node_name_to_voltage, vdd_volts);
+		return;
+	}
+	if (wire_mesh_instance->has_meta(WIRE_MESH_INSTANCE_META_KEY_FOR_SPICE_NODE_NAME)) {
+		update_one_scalar_wire_mesh_albedo_from_voltage(
+				wire_mesh_instance, spice_node_name_to_voltage, vdd_volts);
+	}
 }
 
 } // namespace
