@@ -402,49 +402,22 @@ func fetch_verify_and_extract_one_pdk_archive_via_streaming_on_web(
 	var incremental_sha256 := HashingContext.new()
 	incremental_sha256.start(HashingContext.HASH_SHA256)
 	var total_chunk_bytes_fed := 0
-	var total_chunks_fed_so_far_counter_for_diagnostic := 0
 	while true:
-		var bridge_returned_envelope: Variant = JavaScriptBridge.eval(
+		var bridge_returned_envelope_as_string: String = JavaScriptBridge.eval(
 				"globalThis.spice3d && globalThis.spice3d.takeNextStreamingChunkAsJsonStatusEnvelope()", true)
-		if not (bridge_returned_envelope is String):
-			push_error("%s %s streaming download: bridge returned non-string" % [
-					pdk_family_name, archive_filename])
-			abort_streaming_extraction(spice3d_root_node)
-			return false
-		var parsed_envelope: Variant = JSON.parse_string(bridge_returned_envelope)
-		if not (parsed_envelope is Dictionary):
-			push_error("%s %s streaming download: bridge envelope did not parse as JSON" % [
-					pdk_family_name, archive_filename])
-			abort_streaming_extraction(spice3d_root_node)
-			return false
+		var parsed_envelope: Dictionary = JSON.parse_string(bridge_returned_envelope_as_string)
 		var status_field: String = parsed_envelope.get("status", "")
 		if status_field == "chunk":
 			var chunk_bytes: PackedByteArray = Marshalls.base64_to_raw(parsed_envelope["base64ChunkBody"])
 			incremental_sha256.update(chunk_bytes)
-			var feed_result: Variant = spice3d_root_node.feed_streaming_zstd_tar_compressed_chunk(chunk_bytes)
-			if not (feed_result is Dictionary):
-				push_error("%s %s streaming extraction: bridge returned non-Dictionary (type=%s, value=%s) for a chunk of %d bytes" % [
-						pdk_family_name, archive_filename,
-						typeof(feed_result), str(feed_result), chunk_bytes.size()])
-				abort_streaming_extraction(spice3d_root_node)
-				return false
-			var feed_succeeded: Variant = feed_result.get("was_successful")
-			if not (feed_succeeded is bool):
-				push_error("%s %s streaming extraction: feed_result.was_successful has unexpected type=%s value=%s (full result=%s) on chunk #%d (%d bytes, %d bytes fed so far)" % [
-						pdk_family_name, archive_filename,
-						typeof(feed_succeeded), str(feed_succeeded), str(feed_result),
-						total_chunks_fed_so_far_counter_for_diagnostic, chunk_bytes.size(), total_chunk_bytes_fed])
-				abort_streaming_extraction(spice3d_root_node)
-				return false
-			if not feed_succeeded:
-				push_error("%s %s streaming extraction failed at chunk #%d (%d bytes, %d bytes fed so far): %s" % [
-						pdk_family_name, archive_filename,
-						total_chunks_fed_so_far_counter_for_diagnostic, chunk_bytes.size(), total_chunk_bytes_fed,
-						str(feed_result.get("error_message", "<no error_message field>"))])
+			var feed_result: Dictionary = spice3d_root_node.feed_streaming_zstd_tar_compressed_chunk(chunk_bytes)
+			if not feed_result["was_successful"]:
+				push_error("%s %s streaming extraction failed after %d bytes fed: %s" % [
+						pdk_family_name, archive_filename, total_chunk_bytes_fed,
+						str(feed_result["error_message"])])
 				abort_streaming_extraction(spice3d_root_node)
 				return false
 			total_chunk_bytes_fed += chunk_bytes.size()
-			total_chunks_fed_so_far_counter_for_diagnostic += 1
 			continue
 		if status_field == "pending":
 			await get_tree().create_timer(STREAMING_DOWNLOAD_POLL_INTERVAL_SECONDS_BETWEEN_EMPTY_RESPONSES).timeout
