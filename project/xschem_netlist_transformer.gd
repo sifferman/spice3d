@@ -78,12 +78,14 @@ static func strip_xschem_escape_backslashes_from_subckt_names(spice_netlist_line
 	return "".join(output_characters)
 
 
-static func is_subckt_wrapper_directive(spice_netlist_line: String) -> bool:
+static func is_subckt_open_directive(spice_netlist_line: String) -> bool:
 	var stripped_line := spice_netlist_line.strip_edges()
-	if stripped_line.is_empty(): return false
-	if stripped_line.begins_with(".subckt"): return true
-	if stripped_line == ".ends" or stripped_line.begins_with(".ends "): return true
-	return false
+	return stripped_line.begins_with(".subckt")
+
+
+static func is_subckt_close_directive(spice_netlist_line: String) -> bool:
+	var stripped_line := spice_netlist_line.strip_edges()
+	return stripped_line == ".ends" or stripped_line.begins_with(".ends ")
 
 
 static func looks_like_xschem_component_instance_line(stripped_lowercase_line: String) -> bool:
@@ -170,10 +172,23 @@ static func convert_subckt_netlist_to_top_level_testbench(
 	top_level_testbench_lines.append_array(
 			PackedStringArray(spec["testbench_rail_voltage_definition_lines"]))
 	var raw_xschem_netlist_contained_a_dot_end_directive := false
+	var current_subckt_nesting_depth := 0
+	var already_stripped_outermost_top_level_subckt_wrapper := false
+	var currently_inside_the_outermost_wrapper_being_stripped := false
 	for one_existing_line in raw_xschem_netlist_lines:
-		if is_subckt_wrapper_directive(one_existing_line):
-			continue
-		if one_existing_line.strip_edges() == ".end":
+		if is_subckt_open_directive(one_existing_line):
+			var depth_before_this_open := current_subckt_nesting_depth
+			current_subckt_nesting_depth += 1
+			if depth_before_this_open == 0 and not already_stripped_outermost_top_level_subckt_wrapper:
+				already_stripped_outermost_top_level_subckt_wrapper = true
+				currently_inside_the_outermost_wrapper_being_stripped = true
+				continue
+		elif is_subckt_close_directive(one_existing_line):
+			current_subckt_nesting_depth -= 1
+			if current_subckt_nesting_depth == 0 and currently_inside_the_outermost_wrapper_being_stripped:
+				currently_inside_the_outermost_wrapper_being_stripped = false
+				continue
+		elif one_existing_line.strip_edges() == ".end":
 			raw_xschem_netlist_contained_a_dot_end_directive = true
 			continue
 		var without_empty_param_assignments := strip_empty_parameter_assignments_from_one_spice_line(one_existing_line)

@@ -66,6 +66,24 @@ family downloads ~20&nbsp;MB into IndexedDB; cached afterwards).
       </td>
       <td><a href="./#example=gf180mcu_nand2">open &rarr;</a></td>
     </tr>
+    <tr>
+      <td><code>3bit_counter_busses</code></td>
+      <td>sky130</td>
+      <td>1.8&nbsp;V</td>
+      <td>1 button (CLK pulse)</td>
+      <td>
+        3-bit counter built from three <code>sky130_fd_sc_hd__dfxtp_1</code>
+        flip-flops (vector-instantiated as <code>xdff[2:0]</code>) feeding a
+        <code>3bit_incrementor</code> subcircuit. Each click of the CLK
+        button advances the counter; the
+        <code>state_q[2:0]</code> and <code>state_d[2:0]</code> bus wires
+        light up with one of 8 distinct hues per integer value.
+        First example exercising bus wires (xschem
+        <code>name[MSB:LSB]</code> notation, bit aggregation, and the
+        per-state color palette).
+      </td>
+      <td><a href="./#example=3bit_counter_busses">open &rarr;</a></td>
+    </tr>
   </tbody>
 </table>
 

@@ -27,6 +27,16 @@ const KNOWN_EXAMPLES_BY_DIRECTORY_NAME := {
 		"bundled_file_names": ["gf180mcu_nand2.sch", "gf180mcu_button.sym"],
 		"pdk_family": "gf180mcu",
 	},
+	"3bit_counter_busses": {
+		"top_schematic_file_name": "3bit_counter_busses.sch",
+		"bundled_file_names": [
+			"3bit_counter_busses.sch",
+			"3bit_incrementor.sch",
+			"3bit_incrementor.sym",
+			"button.sym",
+		],
+		"pdk_family": "sky130",
+	},
 }
 var active_example_directory_name: String = DEFAULT_EXAMPLE_DIRECTORY_NAME
 

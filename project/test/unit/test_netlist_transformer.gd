@@ -53,12 +53,47 @@ func test_strip_xschem_escape_backslashes_is_idempotent_on_clean_input() -> void
 			"Lines without backslashes should pass through unchanged.")
 
 
-func test_is_subckt_wrapper_directive_identifies_wrapper_lines() -> void:
-	assert_true(XschemNetlistTransformer.is_subckt_wrapper_directive(".subckt button_test btn_out_n"))
-	assert_true(XschemNetlistTransformer.is_subckt_wrapper_directive(".ends"))
-	assert_true(XschemNetlistTransformer.is_subckt_wrapper_directive(".ends button_test"))
-	assert_false(XschemNetlistTransformer.is_subckt_wrapper_directive("VBUTTON1 net1 VGND"))
-	assert_false(XschemNetlistTransformer.is_subckt_wrapper_directive("*.PININFO btn_out_n:O"))
+func test_is_subckt_open_close_directive_identifies_wrapper_lines() -> void:
+	assert_true(XschemNetlistTransformer.is_subckt_open_directive(".subckt button_test btn_out_n"))
+	assert_false(XschemNetlistTransformer.is_subckt_open_directive(".ends"))
+	assert_true(XschemNetlistTransformer.is_subckt_close_directive(".ends"))
+	assert_true(XschemNetlistTransformer.is_subckt_close_directive(".ends button_test"))
+	assert_false(XschemNetlistTransformer.is_subckt_close_directive(".subckt foo"))
+	assert_false(XschemNetlistTransformer.is_subckt_open_directive("VBUTTON1 net1 VGND"))
+	assert_false(XschemNetlistTransformer.is_subckt_close_directive("VBUTTON1 net1 VGND"))
+	assert_false(XschemNetlistTransformer.is_subckt_open_directive("*.PININFO btn_out_n:O"))
+
+
+func test_only_outermost_subckt_wrapper_is_stripped_inner_subckts_survive() -> void:
+	# 3bit_counter_busses-style: outer .subckt holds the testbench-bound
+	# instances; an inner .subckt definition (3bit_incrementor) sits AFTER
+	# the outer .ends and must survive intact so ngspice can resolve the
+	# x4 reference back to the inner cell.
+	var raw_xschem_emission := PackedStringArray([
+		".subckt outer_cell out",
+		"x_top a b sky130_fd_sc_hd__inv_1",
+		".ends",
+		".subckt inner_cell IN OUT",
+		"xa IN net1 sky130_fd_sc_hd__inv_1",
+		"xb net1 OUT sky130_fd_sc_hd__inv_1",
+		".ends",
+	])
+	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
+			raw_xschem_emission, "sky130")
+	var single_blob := "\n".join(converted_lines)
+	assert_false(single_blob.contains(".subckt outer_cell"),
+			"The outer .subckt wrapper must be stripped so the testbench is top-level.")
+	assert_true(single_blob.contains(".subckt inner_cell"),
+			"The inner .subckt definition must survive — ngspice needs it to resolve "
+			+ "x-calls into the inner cell.")
+	# the inner .ends should also remain
+	var inner_ends_occurrences := 0
+	for one_line in converted_lines:
+		if one_line.strip_edges() == ".ends":
+			inner_ends_occurrences += 1
+	assert_eq(inner_ends_occurrences, 1,
+			"Exactly one .ends should remain (the inner cell's closing directive); "
+			+ "the outer wrapper's .ends was stripped along with its .subckt header.")
 
 
 func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrapper_and_unescapes_subckt_names() -> void:
