@@ -84,6 +84,22 @@ family downloads ~20&nbsp;MB into IndexedDB; cached afterwards).
       </td>
       <td><a href="./#example=3bit_counter_busses">open &rarr;</a></td>
     </tr>
+    <tr>
+      <td><code>3bit_counter</code></td>
+      <td>sky130</td>
+      <td>1.8&nbsp;V</td>
+      <td>1 button (CLK pulse)</td>
+      <td>
+        Same 3-bit counter logic as <code>3bit_counter_busses</code>, but
+        drawn as a flat schematic with individual scalar nets (no bus
+        notation, no nested <code>3bit_incrementor</code> subcircuit).
+        Three <code>dfxtp_1</code> flip-flops + three <code>ha_1</code>
+        half-adders are placed inline at the top level. Useful for
+        comparing the bus visualization against the equivalent
+        per-wire coloring on the same circuit.
+      </td>
+      <td><a href="./#example=3bit_counter">open &rarr;</a></td>
+    </tr>
   </tbody>
 </table>
 

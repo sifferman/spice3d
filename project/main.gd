@@ -37,6 +37,11 @@ const KNOWN_EXAMPLES_BY_DIRECTORY_NAME := {
 		],
 		"pdk_family": "sky130",
 	},
+	"3bit_counter": {
+		"top_schematic_file_name": "3bit_counter.sch",
+		"bundled_file_names": ["3bit_counter.sch", "button.sym"],
+		"pdk_family": "sky130",
+	},
 }
 var active_example_directory_name: String = DEFAULT_EXAMPLE_DIRECTORY_NAME
 
