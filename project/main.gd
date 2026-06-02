@@ -4,6 +4,7 @@ const SiPrefixTime = preload("res://si_prefix_time_formatter.gd")
 const TimeWarpParser = preload("res://time_warp_parser.gd")
 const XschemNetlistTransformer = preload("res://xschem_netlist_transformer.gd")
 const PdkStaging = preload("res://pdk_staging.gd")
+const VerilogSynthesizedSubcktStaging = preload("res://verilog_synthesized_subckt_staging.gd")
 
 @onready var schematic_view: Node3D = $SchematicView
 @onready var status_label: Label = $StatusOverlay/StatusLabel
@@ -40,6 +41,19 @@ const KNOWN_EXAMPLES_BY_DIRECTORY_NAME := {
 	"3bit_counter": {
 		"top_schematic_file_name": "3bit_counter.sch",
 		"bundled_file_names": ["3bit_counter.sch", "button.sym"],
+		"pdk_family": "sky130",
+	},
+	"verilog_and_or": {
+		"top_schematic_file_name": "verilog_and_or_testbench.sch",
+		"bundled_file_names": [
+			"verilog_and_or_testbench.sch",
+			"verilog_and_or.sym",
+			"verilog_and_or.v",
+			"button.sym",
+		],
+		"verilog_module_source_file_names_to_synthesize_into_subckt": [
+			{"verilog_source_file_name": "verilog_and_or.v", "top_module_name": "verilog_and_or"},
+		],
 		"pdk_family": "sky130",
 	},
 }
@@ -158,11 +172,23 @@ func _ready() -> void:
 	set_status_label_text_to_loading_phase("Staging PDK into ngspice")
 	PdkStaging.stage_pdk_family_files_into_web_simulator_filesystem(
 			spice3d_root_node, pdk_family_name, pdk_ciel_version)
+	var verilog_modules_to_synthesize_for_active_example := VerilogSynthesizedSubcktStaging.verilog_modules_to_synthesize_for_example(
+			active_example_metadata())
+	if not verilog_modules_to_synthesize_for_active_example.is_empty():
+		set_status_label_text_to_loading_phase("Synthesizing Verilog modules via browser yosys (first run downloads ~50 MB)")
+	var synthesized_verilog_subckt_definition_lines := await VerilogSynthesizedSubcktStaging.synthesize_all_verilog_modules_for_active_example_via_browser_yosys(
+			self,
+			active_example_staged_directory_path(),
+			verilog_modules_to_synthesize_for_active_example,
+			PdkStaging.absolute_path_for_pdk_stdcell_subckt_spice_used_by_yosys_synth(pdk_family_name, pdk_ciel_version),
+			PdkStaging.absolute_path_for_pdk_stdcell_timing_liberty_used_by_yosys_synth(pdk_family_name, pdk_ciel_version),
+			PdkStaging.stdcell_power_rail_net_names_in_subckt_port_order_for(pdk_family_name))
 	set_status_label_text_to_loading_phase("Generating netlist + starting ngspice")
 	push_spice_netlist_and_start_transient_on_web_simulator(
 			spice3d_root_node,
 			staged_top_schematic_absolute_path,
-			extra_symbol_search_directories)
+			extra_symbol_search_directories,
+			synthesized_verilog_subckt_definition_lines)
 	loaded_schematic_pending_ready_transition_on_first_sample = loaded_schematic
 	spice3d_root_node_pending_ready_transition_on_first_sample = spice3d_root_node
 	set_status_label_text_to_loading_phase("Waiting for first ngspice sample to come back")
@@ -239,7 +265,8 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 func push_spice_netlist_and_start_transient_on_web_simulator(
 		spice3d_root_node: Node,
 		staged_top_schematic_absolute_path: String,
-		extra_symbol_search_directories: PackedStringArray) -> void:
+		extra_symbol_search_directories: PackedStringArray,
+		synthesized_verilog_subckt_definition_lines: PackedStringArray) -> void:
 	spice3d_root_node_for_sample_polling = spice3d_root_node
 	var netlist_lines: PackedStringArray = spice3d_root_node.generate_spice_netlist_for_schematic_file(
 			staged_top_schematic_absolute_path, "", extra_symbol_search_directories)
@@ -248,7 +275,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 		return
 	var pdk_family_name := active_example_pdk_family_name()
 	var netlist_lines_with_pdk_include := XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			netlist_lines, pdk_family_name)
+			netlist_lines, pdk_family_name, synthesized_verilog_subckt_definition_lines)
 	var internal_net_names_to_seed_at_half_vdd := XschemNetlistTransformer.extract_internal_net_names_from_subckt_netlist(
 			netlist_lines, pdk_family_name)
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [

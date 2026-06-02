@@ -159,7 +159,9 @@ static func strip_empty_parameter_assignments_from_one_spice_line(spice_line: St
 
 static func convert_subckt_netlist_to_top_level_testbench(
 		raw_xschem_netlist_lines: PackedStringArray,
-		pdk_family_name: String) -> PackedStringArray:
+		pdk_family_name: String,
+		additional_subckt_definition_lines_to_inject_after_rails: PackedStringArray = PackedStringArray()
+		) -> PackedStringArray:
 	var spec := netlist_spec_for(pdk_family_name)
 	var top_level_testbench_lines := PackedStringArray()
 	for one_include_path_before_lib in spec["extra_include_paths_to_prepend_before_dot_lib_directive"]:
@@ -171,6 +173,7 @@ static func convert_subckt_netlist_to_top_level_testbench(
 		top_level_testbench_lines.append(".include %s" % one_include_path_after_lib)
 	top_level_testbench_lines.append_array(
 			PackedStringArray(spec["testbench_rail_voltage_definition_lines"]))
+	top_level_testbench_lines.append_array(additional_subckt_definition_lines_to_inject_after_rails)
 	var raw_xschem_netlist_contained_a_dot_end_directive := false
 	var current_subckt_nesting_depth := 0
 	var already_stripped_outermost_top_level_subckt_wrapper := false

@@ -204,3 +204,52 @@ func test_gf180mcu_internal_net_extraction_excludes_nfet_and_pfet_subckt_model_n
 			+ "Otherwise it leaks into the seed-IC pass as a phantom .ic v(nfet_05v0)=...")
 	assert_false(internal_nets.has("pfet_05v0"),
 			"pfet_05v0 is the subckt name, not a net — pfet_ prefix in the gf180mcu spec must exclude it.")
+
+
+func test_additional_subckt_definition_lines_get_injected_after_testbench_rails_and_before_xschem_output() -> void:
+	var raw_xschem_emission := PackedStringArray([
+		"** sch_path: /tmp/verilog_and_or_testbench.sch",
+		".subckt verilog_and_or_testbench",
+		"x1 a b c y VGND VNB VPB VPWR verilog_and_or",
+		".ends",
+	])
+	var injected_subckt_definition_lines := PackedStringArray([
+		"* SPICE subckt synthesized from verilog_and_or by yosys",
+		".subckt verilog_and_or a b c y VGND VNB VPB VPWR",
+		"X0 a b c VGND VNB VPB VPWR y sky130_fd_sc_hd__a21o_1",
+		".ends verilog_and_or",
+	])
+	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
+			raw_xschem_emission, "sky130", injected_subckt_definition_lines)
+	var single_blob_for_inspection := "\n".join(converted_lines)
+	var injected_subckt_definition_position := single_blob_for_inspection.find(
+			".subckt verilog_and_or a b c y VGND VNB VPB VPWR")
+	var testbench_rail_voltage_definition_position := single_blob_for_inspection.find(
+			"V_SPICE3D_TESTBENCH_VPWR")
+	var xline_referencing_synthesized_subckt_position := single_blob_for_inspection.find(
+			"x1 a b c y VGND VNB VPB VPWR verilog_and_or")
+	assert_ne(injected_subckt_definition_position, -1,
+			"Synthesized .subckt block must appear in the assembled deck.")
+	assert_ne(testbench_rail_voltage_definition_position, -1,
+			"Testbench rail V-sources must appear in the assembled deck.")
+	assert_ne(xline_referencing_synthesized_subckt_position, -1,
+			"X-line referencing the synthesized subckt must appear in the deck.")
+	assert_gt(injected_subckt_definition_position, testbench_rail_voltage_definition_position,
+			"Synthesized .subckt block must come AFTER testbench rails so VPWR/VGND nets are in scope.")
+	assert_lt(injected_subckt_definition_position, xline_referencing_synthesized_subckt_position,
+			"Synthesized .subckt block must come BEFORE the X-line that references it so ngspice resolves the name.")
+
+
+func test_omitting_additional_subckt_definition_lines_preserves_previous_behavior() -> void:
+	var raw_xschem_emission := PackedStringArray([
+		"** sch_path: /tmp/button_test.sch",
+		".subckt button_test btn_out_n",
+		"VBUTTON1 net1 VGND external",
+		".ends",
+	])
+	var without_explicit_empty_array: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
+			raw_xschem_emission, "sky130")
+	var with_explicit_empty_array: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
+			raw_xschem_emission, "sky130", PackedStringArray())
+	assert_eq(without_explicit_empty_array, with_explicit_empty_array,
+			"Default-arg form must produce identical output to explicit-empty-PackedStringArray form.")

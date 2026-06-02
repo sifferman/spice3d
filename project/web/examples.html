@@ -100,6 +100,24 @@ family downloads ~20&nbsp;MB into IndexedDB; cached afterwards).
       </td>
       <td><a href="./#example=3bit_counter">open &rarr;</a></td>
     </tr>
+    <tr>
+      <td><code>verilog_and_or</code></td>
+      <td>sky130</td>
+      <td>1.8&nbsp;V</td>
+      <td>3 buttons (A, B, C)</td>
+      <td>
+        A Verilog leaf module &mdash; <code>assign y = (a &amp; b) | c;</code> &mdash;
+        synthesized with Yosys against the <code>sky130_fd_sc_hd</code> stdcell
+        library. The single expression collapses to one <code>a21o_1</code> AOI
+        cell. Three clickable buttons drive A, B, C; the output net <code>y</code>
+        follows the boolean truth table. First example demonstrating the
+        Verilog &rarr; Yosys <code>write_spice</code> &rarr; ngspice pipeline.
+        The <code>.v</code> source is the truth; the <code>.subckt</code> is
+        regenerated with
+        <code>scripts/synthesize_verilog_to_sky130_spice_subckt.sh</code>.
+      </td>
+      <td><a href="./#example=verilog_and_or">open &rarr;</a></td>
+    </tr>
   </tbody>
 </table>
 
