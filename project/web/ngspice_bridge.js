@@ -5,13 +5,18 @@
 		return;
 	}
 
+	const MAXIMUM_BUFFERED_SIMULATION_SAMPLES_BEFORE_DROPPING_OLDEST = 200;
+
 	const bridge = {
 		installedFromBridgeScript: true,
+		maximumBufferedSimulationSamplesBeforeDroppingOldest:
+				MAXIMUM_BUFFERED_SIMULATION_SAMPLES_BEFORE_DROPPING_OLDEST,
 		ngspiceWorker: null,
 		isWorkerReady: false,
 		isSimulationRunning: false,
 		nodeNames: null,
 		bufferedSimulationSamples: [],
+		totalBufferedSimulationSamplesDroppedFromOverflow: 0,
 		pendingExternalVoltagesByLowercaseName: Object.create(null),
 
 		initializeWorker: function initializeWorker() {
@@ -95,6 +100,15 @@
 			return drainedSamples;
 		},
 
+		appendDecoratedSampleAndDropOldestIfBufferAtCap: function appendDecoratedSampleAndDropOldestIfBufferAtCap(decoratedSample) {
+			if (this.bufferedSimulationSamples.length
+					>= this.maximumBufferedSimulationSamplesBeforeDroppingOldest) {
+				this.bufferedSimulationSamples.shift();
+				this.totalBufferedSimulationSamplesDroppedFromOverflow += 1;
+			}
+			this.bufferedSimulationSamples.push(decoratedSample);
+		},
+
 		decorateSampleWithNamedVoltages: function decorateSampleWithNamedVoltages(rawSample) {
 			if (!this.nodeNames || !rawSample || !Array.isArray(rawSample.nodeVoltages)) {
 				return rawSample;
@@ -142,7 +156,8 @@
 					this.nodeNames = workerMessage.nodeNames;
 					break;
 				case 'simulationSample':
-					this.bufferedSimulationSamples.push(this.decorateSampleWithNamedVoltages(workerMessage.sample));
+					this.appendDecoratedSampleAndDropOldestIfBufferAtCap(
+							this.decorateSampleWithNamedVoltages(workerMessage.sample));
 					break;
 				case 'runningStateChanged':
 					this.isSimulationRunning = Boolean(workerMessage.isSimulationRunning);

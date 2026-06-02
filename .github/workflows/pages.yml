@@ -91,6 +91,9 @@ jobs:
       - name: Verify button-toggle end-to-end (skips without PDK_ROOT)
         run: node test/node/test-ngspice-wasm-button-toggle-end-to-end.js
 
+      - name: Verify JS bridge sample buffer is capped under drain starvation
+        run: node test/node/test-ngspice-bridge-buffer-cap-under-drain-starvation.js
+
       - name: Run host-C++ unit tests (schematic loader, streaming zstd-tar extractor)
         run: make -C test run
 
