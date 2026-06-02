@@ -217,24 +217,48 @@ jobs:
           cp third_party/ngspice/build-emscripten/ngspice.js build-web/
           cp third_party/ngspice/build-emscripten/ngspice.wasm build-web/
 
-      - name: Inject ngspice_bridge.js into exported index.html
+      - name: Install pinned YoWASP yosys + copy bundle into the export
+        run: |
+          set -euo pipefail
+          yowasp_yosys_pinned_npm_version="0.65.176-dev.1145"
+          install_scratch_dir="$(mktemp -d)"
+          cd "$install_scratch_dir"
+          npm init -y >/dev/null
+          npm install --no-save --no-audit --no-fund --silent "@yowasp/yosys@${yowasp_yosys_pinned_npm_version}"
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p build-web/yowasp/gen build-web/yowasp/lib
+          cp "$install_scratch_dir"/node_modules/@yowasp/yosys/gen/*.js \
+             "$install_scratch_dir"/node_modules/@yowasp/yosys/gen/*.wasm \
+             "$install_scratch_dir"/node_modules/@yowasp/yosys/gen/*.tar \
+             build-web/yowasp/gen/
+          cp "$install_scratch_dir"/node_modules/@yowasp/yosys/lib/* build-web/yowasp/lib/
+          du -sh build-web/yowasp
+          ls -la build-web/yowasp/gen
+
+      - name: Inject ngspice_bridge.js + verilog_synth_bridge.js into exported index.html
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
           exported_index_html_path = Path('build-web/index.html')
           exported_html = exported_index_html_path.read_text()
-          ngspice_bridge_script_tag = '<script src="ngspice_bridge.js"></script>'
-          if ngspice_bridge_script_tag in exported_html:
-              print('ngspice_bridge.js script tag already present, leaving alone')
-          else:
-              html_with_script_tag = exported_html.replace(
+          script_tags_to_inject_in_head_order = [
+              '<script src="ngspice_bridge.js"></script>',
+              '<script src="verilog_synth_bridge.js"></script>',
+          ]
+          # Each replace inserts right after `<head>`, so to preserve the
+          # listed order in the final HTML we iterate in reverse.
+          for one_script_tag in reversed(script_tags_to_inject_in_head_order):
+              if one_script_tag in exported_html:
+                  print(f'{one_script_tag} already present, leaving alone')
+                  continue
+              exported_html = exported_html.replace(
                   '<head>',
-                  '<head>\n\t' + ngspice_bridge_script_tag,
+                  '<head>\n\t' + one_script_tag,
                   1,
               )
-              exported_index_html_path.write_text(html_with_script_tag)
-              print('injected ngspice_bridge.js script tag into index.html')
+              print(f'injected {one_script_tag} into index.html')
+          exported_index_html_path.write_text(exported_html)
           PY
 
       - name: Add .nojekyll

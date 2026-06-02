@@ -15,7 +15,7 @@ const PDK_CIEL_CORS_PROXY_URL_PREFIX := "https://ciel-cors-proxy.sifferman.worke
 
 const SKY130_FAMILY_SPEC := {
 	"name": "sky130",
-	"cache_key_revision": 1,
+	"cache_key_revision": 2,
 	"variants_to_expose_xschem_libraries_for": ["sky130A", "sky130B"],
 	"ciel_manifest_url": "https://www-archive.fossi-foundation.org/ciel-releases/sky130/manifest.json",
 	"ciel_fallback_version_if_manifest_unreachable": "74c0e6b118a67d94c24172143d3bd597473fa63d",
@@ -31,12 +31,16 @@ const SKY130_FAMILY_SPEC := {
 		"/libs.tech/xschem/",
 		"/libs.ref/sky130_fd_pr/spice/",
 		"/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
+		"/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
 	],
 	"pdk_source_subdirectories_relative_to_ciel_root_to_stage_into_worker": [
 		"/sky130A/libs.tech/combined",
 		"/sky130A/libs.ref/sky130_fd_pr/spice",
 		"/sky130A/libs.ref/sky130_fd_sc_hd/spice",
 	],
+	"stdcell_subckt_spice_relative_path_inside_ciel_root_for_yosys_synth": "/sky130A/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
+	"stdcell_timing_liberty_relative_path_inside_ciel_root_for_yosys_synth": "/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
+	"stdcell_power_rail_net_names_in_subckt_port_order": ["VGND", "VNB", "VPB", "VPWR"],
 }
 
 const GF180MCU_FAMILY_SPEC := {
@@ -57,6 +61,9 @@ const GF180MCU_FAMILY_SPEC := {
 	"pdk_source_subdirectories_relative_to_ciel_root_to_stage_into_worker": [
 		"/gf180mcuD/libs.tech/ngspice",
 	],
+	"stdcell_subckt_spice_relative_path_inside_ciel_root_for_yosys_synth": "",
+	"stdcell_timing_liberty_relative_path_inside_ciel_root_for_yosys_synth": "",
+	"stdcell_power_rail_net_names_in_subckt_port_order": ["VDD", "VNW", "VPW", "VSS"],
 }
 
 const PDK_FAMILY_SPECS_BY_NAME := {
@@ -83,6 +90,28 @@ static func absolute_path_for_pdk_family_local_cache_root(pdk_family_name: Strin
 
 static func user_path_for_pdk_family_cache_root(pdk_family_name: String, ciel_version: String) -> String:
 	return "user://%s/%s" % [pdk_family_name, ciel_version]
+
+
+static func absolute_path_for_pdk_stdcell_subckt_spice_used_by_yosys_synth(
+		pdk_family_name: String, ciel_version: String) -> String:
+	var spec := family_spec_for(pdk_family_name)
+	var relative_path: String = spec["stdcell_subckt_spice_relative_path_inside_ciel_root_for_yosys_synth"]
+	if relative_path.is_empty():
+		return ""
+	return absolute_path_for_pdk_family_local_cache_root(pdk_family_name, ciel_version) + relative_path
+
+
+static func absolute_path_for_pdk_stdcell_timing_liberty_used_by_yosys_synth(
+		pdk_family_name: String, ciel_version: String) -> String:
+	var spec := family_spec_for(pdk_family_name)
+	var relative_path: String = spec["stdcell_timing_liberty_relative_path_inside_ciel_root_for_yosys_synth"]
+	if relative_path.is_empty():
+		return ""
+	return absolute_path_for_pdk_family_local_cache_root(pdk_family_name, ciel_version) + relative_path
+
+
+static func stdcell_power_rail_net_names_in_subckt_port_order_for(pdk_family_name: String) -> PackedStringArray:
+	return PackedStringArray(family_spec_for(pdk_family_name)["stdcell_power_rail_net_names_in_subckt_port_order"])
 
 
 static func absolute_path_for_pdk_xschem_library_directory(
