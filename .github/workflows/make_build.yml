@@ -1,7 +1,7 @@
 # For syntax, see https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
-# Manual workflow that builds release-ready GDExtension artifacts for every
-# platform this project ships. Trigger from the Actions tab; download the
-# merged `spice3d` artifact at the end; attach to a GitHub Release.
+# Manual workflow that builds release-ready GDExtension artifacts. Trigger
+# from the Actions tab; download the merged `spice3d` artifact at the end;
+# attach to a GitHub Release.
 
 name: Make a GDExtension build for all supported platforms
 on:
@@ -12,17 +12,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Matrix is intentionally limited to platforms where we currently have
-        # a viable libngspice build path (host-native via
-        # scripts/build-ngspice-for-native.sh, and emscripten via
-        # scripts/build-ngspice-for-emscripten.sh). Adding macos/windows/
-        # android/ios would require cross-compiling ngspice for each target
-        # first.
+        # Each platform needs libngspice built for the host. Linux + macOS
+        # build host-native via scripts/build-ngspice-for-native.sh; web
+        # builds via scripts/build-ngspice-for-emscripten.sh; Windows builds
+        # via the same native script invoked from MSYS2/UCRT64 shell.
         include:
           - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
             target-type: template_debug
             float-precision: single
           - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
+            target-type: template_release
+            float-precision: single
+          - target: { platform: macos, arch: arm64, os: macos-latest }
+            target-type: template_debug
+            float-precision: single
+          - target: { platform: macos, arch: arm64, os: macos-latest }
+            target-type: template_release
+            float-precision: single
+          - target: { platform: windows, arch: x86_64, os: windows-latest }
+            target-type: template_debug
+            float-precision: single
+          - target: { platform: windows, arch: x86_64, os: windows-latest }
             target-type: template_release
             float-precision: single
           - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
@@ -33,11 +43,41 @@ jobs:
             float-precision: single
 
     runs-on: ${{ matrix.target.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.target.platform == 'windows' && 'msys2 {0}' || 'bash' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: true
+
+      - name: Setup MSYS2 (windows only)
+        if: matrix.target.platform == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel
+            git
+            autoconf
+            automake
+            libtool
+            bison
+            flex
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-python
+
+      - name: Install ngspice build prerequisites (linux+web)
+        if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
+
+      - name: Install ngspice build prerequisites (macos)
+        if: matrix.target.platform == 'macos'
+        shell: bash
+        run: brew install autoconf automake libtool
 
       - name: Setup godot-cpp
         uses: ./godot-cpp/.github/actions/setup-godot-cpp
@@ -45,16 +85,13 @@ jobs:
           platform: ${{ matrix.target.platform }}
           em-version: 3.1.62
 
-      - name: Install ngspice build prerequisites
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
-
       - name: Cache ngspice native build
         if: matrix.target.platform != 'web'
         id: cache_ngspice_native_build
         uses: actions/cache@v4
         with:
           path: third_party/ngspice/build-native
-          key: ngspice-native-${{ hashFiles('scripts/build-ngspice-for-native.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+          key: ngspice-native-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ hashFiles('scripts/build-ngspice-for-native.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
 
       - name: Build ngspice for native
         if: matrix.target.platform != 'web' && steps.cache_ngspice_native_build.outputs.cache-hit != 'true'
@@ -79,15 +116,13 @@ jobs:
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
 
       - name: Build GDExtension
-        shell: sh
-        env:
-          SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
         run: |
+          set -e
           EXTRA=""
           if [ "${{ matrix.target.platform }}" = "web" ]; then
             EXTRA="threads=no"
           fi
-          scons -j"$(nproc 2>/dev/null || echo 4)" target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }} $EXTRA
+          scons -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)" target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }} $EXTRA
 
       - name: Save .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-save
@@ -95,17 +130,31 @@ jobs:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
 
-      - name: Bundle libngspice next to the GDExtension (linux only)
+      - name: Bundle libngspice next to the GDExtension (linux)
         if: matrix.target.platform == 'linux'
         run: |
-          set -euo pipefail
+          set -e
           cp -d third_party/ngspice/build-native/src/.libs/libngspice.so* project/bin/linux/
           ls -la project/bin/linux/
 
-      - name: Bundle ngspice WASM module next to the GDExtension (web only)
+      - name: Bundle libngspice next to the GDExtension (macos)
+        if: matrix.target.platform == 'macos'
+        run: |
+          set -e
+          cp -P third_party/ngspice/build-native/src/.libs/libngspice*.dylib project/bin/macos/
+          ls -la project/bin/macos/
+
+      - name: Bundle libngspice next to the GDExtension (windows)
+        if: matrix.target.platform == 'windows'
+        run: |
+          set -e
+          cp third_party/ngspice/build-native/src/.libs/libngspice*.dll project/bin/windows/
+          ls -la project/bin/windows/
+
+      - name: Bundle ngspice WASM module next to the GDExtension (web)
         if: matrix.target.platform == 'web'
         run: |
-          set -euo pipefail
+          set -e
           cp third_party/ngspice/build-emscripten/ngspice.js project/bin/web/
           cp third_party/ngspice/build-emscripten/ngspice.wasm project/bin/web/
           ls -la project/bin/web/
@@ -118,9 +167,6 @@ jobs:
             project/bin/spice3d.gdextension
             project/bin/${{ matrix.target.platform }}/**
 
-  # Merge per-job artifacts into a single `spice3d` download you can attach
-  # to a GitHub Release in one click. Comment this job out if you'd rather
-  # download each per-platform artifact separately.
   merge:
     runs-on: ubuntu-22.04
     needs: build
