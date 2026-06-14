@@ -39,6 +39,29 @@ env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
 env.Append(CPPPATH=["src/", "third_party/xschem2spice/src/", "third_party/zstd/lib/"])
 
+# Native builds (linux/macos/windows) link libngspice for the
+# LibngspiceSpiceSimulator. Web build uses the ngspice WASM module loaded
+# in a Worker instead. Require `scripts/build-ngspice-for-native.sh` to
+# have been run first; SConstruct refuses to proceed if its artifacts are
+# missing so the failure mode is "obvious early" rather than a cryptic
+# undefined-reference link error later.
+if env["platform"] != "web":
+    ngspice_native_include_directory = "third_party/ngspice/src/include"
+    ngspice_native_library_directory = "third_party/ngspice/build-native/src/.libs"
+    ngspice_native_shared_library_path = ngspice_native_library_directory + "/libngspice.so"
+    if not (os.path.isdir(ngspice_native_include_directory)
+            and os.path.isfile(ngspice_native_shared_library_path)):
+        print_error("""ngspice native build is missing. Run:
+
+    scripts/build-ngspice-for-native.sh
+
+before invoking scons for a native target (platform={}).""".format(env["platform"]))
+        sys.exit(1)
+    env.Append(CPPPATH=[ngspice_native_include_directory])
+    env.Append(LIBPATH=[ngspice_native_library_directory])
+    env.Append(LIBS=["ngspice"])
+    env.Append(RPATH=[env.Literal("\\$$ORIGIN/../../../third_party/ngspice/build-native/src/.libs")])
+
 # xschem2spice ships a tiny CLI driver in xschem2spice.c that has its own
 # main() — exclude it. We link the library sources directly into the
 # GDExtension instead of building a separate static library.

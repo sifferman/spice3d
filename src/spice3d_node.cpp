@@ -213,10 +213,8 @@ godot::String Spice3DNode::describe_simulator_backend() {
 	}
 #ifdef WEB_ENABLED
 	return godot::String("web (JavaScriptBridge to ngspice Worker)");
-#elif defined(SPICE3D_HAVE_LIBNGSPICE)
-	return godot::String("native (libngspice)");
 #else
-	return godot::String("native (stub, libngspice not linked)");
+	return godot::String("native (libngspice)");
 #endif
 }
 

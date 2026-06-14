@@ -41,6 +41,20 @@ jobs:
         with:
           platform: linux
 
+      - name: Install ngspice build prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
+
+      - name: Cache ngspice native build
+        id: cache_ngspice_native_build
+        uses: actions/cache@v4
+        with:
+          path: third_party/ngspice/build-native
+          key: ngspice-native-${{ hashFiles('scripts/build-ngspice-for-native.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+
+      - name: Build ngspice for native
+        if: steps.cache_ngspice_native_build.outputs.cache-hit != 'true'
+        run: scripts/build-ngspice-for-native.sh
+
       - name: Restore SCons cache (linux)
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
@@ -64,9 +78,6 @@ jobs:
         with:
           platform: web
           em-version: 3.1.62
-
-      - name: Install ngspice build prerequisites
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
 
       - name: Cache ngspice emscripten build
         id: cache_ngspice_emscripten_build

@@ -1,5 +1,7 @@
 #pragma once
 
+#ifndef WEB_ENABLED
+
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -61,3 +63,5 @@ private:
 
 } // namespace native
 } // namespace spice3d
+
+#endif // !WEB_ENABLED
