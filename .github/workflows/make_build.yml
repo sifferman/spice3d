@@ -1,5 +1,7 @@
 # For syntax, see https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
-# This workflow is triggered manually on the "Actions" tab on GitHub, and can be used to create releases.
+# Manual workflow that builds release-ready GDExtension artifacts for every
+# platform this project ships. Trigger from the Actions tab; download the
+# merged `spice3d` artifact at the end; attach to a GitHub Release.
 
 name: Make a GDExtension build for all supported platforms
 on:
@@ -10,51 +12,65 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # A build is made for every possible combination of parameters
-        # You can add or remove entries from the arrays of each parameter to customize which builds you want to run.
-        # See https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/running-variations-of-jobs-in-a-workflow
-        target:
-          [
-            { platform: linux, arch: x86_64, os: ubuntu-22.04 },
-            { platform: linux, arch: x86_32, os: ubuntu-22.04 },
-            { platform: linux, arch: arm64, os: ubuntu-22.04-arm },
-            { platform: linux, arch: arm32, os: ubuntu-22.04-arm },
-            { platform: windows, arch: x86_64, os: windows-latest },
-            { platform: windows, arch: x86_32, os: windows-latest },
-            { platform: windows, arch: arm64, os: windows-latest },
-            { platform: macos, arch: universal, os: macos-latest },
-            { platform: android, arch: x86_64, os: ubuntu-22.04 },
-            { platform: android, arch: x86_32, os: ubuntu-22.04 },
-            { platform: android, arch: arm64, os: ubuntu-22.04 },
-            { platform: android, arch: arm32, os: ubuntu-22.04 },
-            { platform: ios, arch: arm64, os: macos-latest },
-            { platform: web, arch: wasm32, os: ubuntu-22.04 },
-          ]
-        target-type: [template_debug, template_release]
-        float-precision: [single]
+        # Matrix is intentionally limited to platforms where we currently have
+        # a viable libngspice build path (host-native via
+        # scripts/build-ngspice-for-native.sh, and emscripten via
+        # scripts/build-ngspice-for-emscripten.sh). Adding macos/windows/
+        # android/ios would require cross-compiling ngspice for each target
+        # first.
+        include:
+          - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
+            target-type: template_debug
+            float-precision: single
+          - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
+            target-type: template_release
+            float-precision: single
+          - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
+            target-type: template_debug
+            float-precision: single
+          - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
+            target-type: template_release
+            float-precision: single
 
     runs-on: ${{ matrix.target.os }}
     steps:
-      # Clone this repository
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: true
 
-      # Add linux x86_32 toolchain
-      - name: Install multilib support
-        if: ${{ matrix.target.platform == 'linux' && matrix.target.arch == 'x86_32' }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
-
-      # Setup dependencies
       - name: Setup godot-cpp
         uses: ./godot-cpp/.github/actions/setup-godot-cpp
         with:
           platform: ${{ matrix.target.platform }}
           em-version: 3.1.62
 
-      # Build GDExtension (with caches)
+      - name: Install ngspice build prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
+
+      - name: Cache ngspice native build
+        if: matrix.target.platform != 'web'
+        id: cache_ngspice_native_build
+        uses: actions/cache@v4
+        with:
+          path: third_party/ngspice/build-native
+          key: ngspice-native-${{ hashFiles('scripts/build-ngspice-for-native.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+
+      - name: Build ngspice for native
+        if: matrix.target.platform != 'web' && steps.cache_ngspice_native_build.outputs.cache-hit != 'true'
+        run: scripts/build-ngspice-for-native.sh
+
+      - name: Cache ngspice emscripten build
+        if: matrix.target.platform == 'web'
+        id: cache_ngspice_emscripten_build
+        uses: actions/cache@v4
+        with:
+          path: third_party/ngspice/build-emscripten
+          key: ngspice-emscripten-${{ hashFiles('scripts/build-ngspice-for-emscripten.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+
+      - name: Build ngspice for emscripten
+        if: matrix.target.platform == 'web' && steps.cache_ngspice_emscripten_build.outputs.cache-hit != 'true'
+        run: scripts/build-ngspice-for-emscripten.sh
 
       - name: Restore .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-restore
@@ -62,12 +78,16 @@ jobs:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
 
-      - name: Build GDExtension Debug Build
+      - name: Build GDExtension
         shell: sh
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
         run: |
-          scons target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }}
+          EXTRA=""
+          if [ "${{ matrix.target.platform }}" = "web" ]; then
+            EXTRA="threads=no"
+          fi
+          scons -j"$(nproc 2>/dev/null || echo 4)" target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }} $EXTRA
 
       - name: Save .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-save
@@ -75,23 +95,32 @@ jobs:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
 
-      # Clean up compilation files
-      - name: Windows - Delete compilation files
-        if: ${{ matrix.target.platform == 'windows' }}
-        shell: pwsh
+      - name: Bundle libngspice next to the GDExtension (linux only)
+        if: matrix.target.platform == 'linux'
         run: |
-          Remove-Item bin/* -Include *.exp,*.lib,*.pdb -Force
+          set -euo pipefail
+          cp -d third_party/ngspice/build-native/src/.libs/libngspice.so* project/bin/linux/
+          ls -la project/bin/linux/
 
-      # Upload the build
+      - name: Bundle ngspice WASM module next to the GDExtension (web only)
+        if: matrix.target.platform == 'web'
+        run: |
+          set -euo pipefail
+          cp third_party/ngspice/build-emscripten/ngspice.js project/bin/web/
+          cp third_party/ngspice/build-emscripten/ngspice.wasm project/bin/web/
+          ls -la project/bin/web/
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: spice3d-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.float-precision }}-${{ matrix.target-type }}
           path: |
-            ${{ github.workspace }}/bin/**
+            project/bin/spice3d.gdextension
+            project/bin/${{ matrix.target.platform }}/**
 
-  # Merges all the build artifacts together into a single spice3d artifact.
-  # If you comment out this step, all the builds will be uploaded individually.
+  # Merge per-job artifacts into a single `spice3d` download you can attach
+  # to a GitHub Release in one click. Comment this job out if you'd rather
+  # download each per-platform artifact separately.
   merge:
     runs-on: ubuntu-22.04
     needs: build

@@ -60,7 +60,14 @@ before invoking scons for a native target (platform={}).""".format(env["platform
     env.Append(CPPPATH=[ngspice_native_include_directory])
     env.Append(LIBPATH=[ngspice_native_library_directory])
     env.Append(LIBS=["ngspice"])
-    env.Append(RPATH=[env.Literal("\\$$ORIGIN/../../../third_party/ngspice/build-native/src/.libs")])
+    # RUNPATH order matters: $ORIGIN first so a release artifact that bundles
+    # libngspice.so next to libspice3d.so resolves without LD_LIBRARY_PATH.
+    # The dev-checkout path is the fallback for local builds where the
+    # libngspice.so wasn't copied into project/bin/<platform>/.
+    env.Append(RPATH=[
+        env.Literal("\\$$ORIGIN"),
+        env.Literal("\\$$ORIGIN/../../../third_party/ngspice/build-native/src/.libs"),
+    ])
 
 # xschem2spice ships a tiny CLI driver in xschem2spice.c that has its own
 # main() — exclude it. We link the library sources directly into the
