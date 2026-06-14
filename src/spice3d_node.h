@@ -44,17 +44,17 @@ public:
 			const godot::String &schematic_file_path,
 			const godot::String &xschemrc_file_path,
 			const godot::PackedStringArray &extra_symbol_search_directories);
-	bool push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
+	bool start_transient_analysis_with_netlist_and_seed_ic_nets(
 			const godot::PackedStringArray &netlist_lines,
-			double timestep_seconds,
+			double transient_timestep_seconds,
 			const godot::PackedStringArray &internal_net_names_to_seed_at_half_vdd);
-	bool update_time_warp_timestep_on_web_simulator(double timestep_seconds);
-	void halt_simulation_on_web_simulator();
-	void set_external_voltage_source_on_web_simulator(const godot::String &source_name, double volts);
-	godot::Array drain_buffered_simulation_samples_from_web_simulator();
-	bool install_file_text_in_web_simulator_filesystem(
-			const godot::String &virtual_path_inside_worker_filesystem,
-			const godot::String &file_content_text);
+	bool update_transient_timestep_mid_simulation(double new_timestep_seconds);
+	void stop_simulation();
+	void set_external_voltage_source(const godot::String &source_name, double volts);
+	godot::Array drain_buffered_simulation_samples_as_godot_array();
+	bool install_file_text_in_simulator_filesystem(
+			const godot::String &virtual_path_in_simulator_filesystem,
+			const godot::String &file_content);
 	void apply_node_voltages_to_wire_colors(
 			godot::Node3D *schematic_root_node,
 			const godot::Dictionary &spice_node_name_to_voltage,

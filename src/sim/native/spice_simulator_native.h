@@ -17,8 +17,14 @@ public:
 	LibngspiceSpiceSimulator();
 	~LibngspiceSpiceSimulator() override;
 
-	bool load_netlist_lines(const std::vector<std::string> &netlist_lines) override;
-	bool start_transient_analysis(double timestep_seconds, double stop_time_seconds) override;
+	void install_file_text_in_simulator_filesystem(
+			const std::string &virtual_path_in_simulator_filesystem,
+			const std::string &file_content) override;
+	bool start_transient_analysis_with_netlist_and_seed_ic_nets(
+			const std::vector<std::string> &netlist_lines,
+			double transient_timestep_seconds,
+			const std::vector<std::string> &internal_net_names_to_seed_at_half_vdd) override;
+	bool update_transient_timestep_mid_simulation(double new_timestep_seconds) override;
 	void stop_simulation() override;
 	bool is_simulation_running() const override;
 	void set_external_voltage_source(const std::string &source_name, double volts) override;

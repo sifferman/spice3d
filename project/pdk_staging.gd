@@ -566,7 +566,7 @@ static func stage_text_files_recursively_into_worker_filesystem(
 			continue
 		var one_file_text_content := one_file_handle.get_as_text()
 		one_file_handle.close()
-		spice3d_root_node.install_file_text_in_web_simulator_filesystem(
+		spice3d_root_node.install_file_text_in_simulator_filesystem(
 				one_entry_virtual_path, one_file_text_content)
 		staged_file_count += 1
 	directory_handle.list_dir_end()

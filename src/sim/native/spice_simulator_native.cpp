@@ -114,9 +114,69 @@ LibngspiceSpiceSimulator::~LibngspiceSpiceSimulator() {
 	stop_simulation();
 }
 
-bool LibngspiceSpiceSimulator::load_netlist_lines(const std::vector<std::string> &netlist_lines) {
+namespace {
+
+constexpr double EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS = 1.0e6;
+
+bool load_netlist_lines_into_ngspice(
+		const std::vector<std::string> &netlist_lines,
+		bool &ngspice_has_been_initialized_flag,
+		LibngspiceSpiceSimulator *caller_instance_for_callbacks);
+
+bool start_or_restart_background_transient(
+		double transient_timestep_seconds,
+		double stop_time_seconds);
+
+} // namespace
+
+void LibngspiceSpiceSimulator::install_file_text_in_simulator_filesystem(
+		const std::string &virtual_path_in_simulator_filesystem,
+		const std::string &file_content) {
+	(void)virtual_path_in_simulator_filesystem;
+	(void)file_content;
+}
+
+bool LibngspiceSpiceSimulator::start_transient_analysis_with_netlist_and_seed_ic_nets(
+		const std::vector<std::string> &netlist_lines,
+		double transient_timestep_seconds,
+		const std::vector<std::string> &internal_net_names_to_seed_at_half_vdd) {
+	(void)internal_net_names_to_seed_at_half_vdd;
 #ifdef SPICE3D_HAVE_LIBNGSPICE
-	if (!ngspice_has_been_initialized) {
+	if (!load_netlist_lines_into_ngspice(netlist_lines, ngspice_has_been_initialized, this)) {
+		return false;
+	}
+	stop_has_been_requested = false;
+	return start_or_restart_background_transient(
+			transient_timestep_seconds, EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS);
+#else
+	(void)netlist_lines;
+	(void)transient_timestep_seconds;
+	return false;
+#endif
+}
+
+bool LibngspiceSpiceSimulator::update_transient_timestep_mid_simulation(double new_timestep_seconds) {
+#ifdef SPICE3D_HAVE_LIBNGSPICE
+	if (background_thread_is_running.load()) {
+		stop_has_been_requested = true;
+		ngSpice_Command(const_cast<char *>("bg_halt"));
+	}
+	return start_or_restart_background_transient(
+			new_timestep_seconds, EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS);
+#else
+	(void)new_timestep_seconds;
+	return false;
+#endif
+}
+
+namespace {
+
+bool load_netlist_lines_into_ngspice(
+		const std::vector<std::string> &netlist_lines,
+		bool &ngspice_has_been_initialized_flag,
+		LibngspiceSpiceSimulator *caller_instance_for_callbacks) {
+#ifdef SPICE3D_HAVE_LIBNGSPICE
+	if (!ngspice_has_been_initialized_flag) {
 		ngSpice_Init(
 				ngspice_send_char_callback,
 				ngspice_send_stat_callback,
@@ -124,15 +184,15 @@ bool LibngspiceSpiceSimulator::load_netlist_lines(const std::vector<std::string>
 				ngspice_send_data_callback,
 				ngspice_send_init_data_callback,
 				ngspice_background_thread_running_callback,
-				this);
+				caller_instance_for_callbacks);
 		static int caller_instance_identifier = 0;
 		ngSpice_Init_Sync(
 				ngspice_get_voltage_source_data_callback,
 				nullptr,
 				nullptr,
 				&caller_instance_identifier,
-				this);
-		ngspice_has_been_initialized = true;
+				caller_instance_for_callbacks);
+		ngspice_has_been_initialized_flag = true;
 	}
 
 	std::vector<char *> netlist_argv;
@@ -144,11 +204,15 @@ bool LibngspiceSpiceSimulator::load_netlist_lines(const std::vector<std::string>
 	return ngSpice_Circ(netlist_argv.data()) == 0;
 #else
 	(void)netlist_lines;
+	(void)ngspice_has_been_initialized_flag;
+	(void)caller_instance_for_callbacks;
 	return false;
 #endif
 }
 
-bool LibngspiceSpiceSimulator::start_transient_analysis(double timestep_seconds, double stop_time_seconds) {
+bool start_or_restart_background_transient(
+		double transient_timestep_seconds,
+		double stop_time_seconds) {
 #ifdef SPICE3D_HAVE_LIBNGSPICE
 	ngSpice_Command(const_cast<char *>("save none"));
 	ngSpice_Command(const_cast<char *>("esave node"));
@@ -158,16 +222,17 @@ bool LibngspiceSpiceSimulator::start_transient_analysis(double timestep_seconds,
 			transient_command_buffer,
 			sizeof(transient_command_buffer),
 			"bg_tran %.15g %.15g",
-			timestep_seconds,
+			transient_timestep_seconds,
 			stop_time_seconds);
-	stop_has_been_requested = false;
 	return ngSpice_Command(transient_command_buffer) == 0;
 #else
-	(void)timestep_seconds;
+	(void)transient_timestep_seconds;
 	(void)stop_time_seconds;
 	return false;
 #endif
 }
+
+} // namespace
 
 void LibngspiceSpiceSimulator::stop_simulation() {
 #ifdef SPICE3D_HAVE_LIBNGSPICE

@@ -20,8 +20,16 @@ class SpiceSimulator {
 public:
 	virtual ~SpiceSimulator() = default;
 
-	virtual bool load_netlist_lines(const std::vector<std::string> &netlist_lines) = 0;
-	virtual bool start_transient_analysis(double timestep_seconds, double stop_time_seconds) = 0;
+	virtual void install_file_text_in_simulator_filesystem(
+			const std::string &virtual_path_in_simulator_filesystem,
+			const std::string &file_content) = 0;
+
+	virtual bool start_transient_analysis_with_netlist_and_seed_ic_nets(
+			const std::vector<std::string> &netlist_lines,
+			double transient_timestep_seconds,
+			const std::vector<std::string> &internal_net_names_to_seed_at_half_vdd) = 0;
+
+	virtual bool update_transient_timestep_mid_simulation(double new_timestep_seconds) = 0;
 	virtual void stop_simulation() = 0;
 	virtual bool is_simulation_running() const = 0;
 	virtual void set_external_voltage_source(const std::string &source_name, double volts) = 0;

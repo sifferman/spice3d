@@ -184,7 +184,7 @@ func _ready() -> void:
 			PdkStaging.absolute_path_for_pdk_stdcell_timing_liberty_used_by_yosys_synth(pdk_family_name, pdk_ciel_version),
 			PdkStaging.stdcell_power_rail_net_names_in_subckt_port_order_for(pdk_family_name))
 	set_status_label_text_to_loading_phase("Generating netlist + starting ngspice")
-	push_spice_netlist_and_start_transient_on_web_simulator(
+	push_spice_netlist_and_start_transient_analysis(
 			spice3d_root_node,
 			staged_top_schematic_absolute_path,
 			extra_symbol_search_directories,
@@ -223,14 +223,14 @@ func _on_time_warp_input_text_submitted_by_user(submitted_input_text: String) ->
 	if currently_selected_time_warp_simulated_seconds_per_real_second == TimeWarpParser.PAUSE_SENTINEL_SIMULATED_SECONDS_PER_REAL_SECOND:
 		print("[spice3d] time-warp set to 0 — simulation paused; wires hold last displayed state")
 		if spice3d_root_node_for_sample_polling != null:
-			spice3d_root_node_for_sample_polling.halt_simulation_on_web_simulator()
+			spice3d_root_node_for_sample_polling.stop_simulation()
 		return
 	var new_transient_timestep_seconds := compute_transient_timestep_seconds_for_current_time_warp()
 	print("[spice3d] time-warp set to %s sim-time per real-second (timestep=%s)" % [
 			SiPrefixTime.format_seconds_with_si_prefix(currently_selected_time_warp_simulated_seconds_per_real_second),
 			SiPrefixTime.format_seconds_with_si_prefix(new_transient_timestep_seconds)])
 	if spice3d_root_node_for_sample_polling != null:
-		spice3d_root_node_for_sample_polling.update_time_warp_timestep_on_web_simulator(
+		spice3d_root_node_for_sample_polling.update_transient_timestep_mid_simulation(
 				new_transient_timestep_seconds)
 
 
@@ -254,7 +254,7 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 	print("[spice3d] button '%s' toggled %s" % [button_instance_name, "HIGH" if new_high_state else "LOW"])
 	if spice3d_root_node_for_sample_polling != null:
 		var new_voltage_for_button := active_example_supply_voltage_volts() if new_high_state else 0.0
-		spice3d_root_node_for_sample_polling.set_external_voltage_source_on_web_simulator(
+		spice3d_root_node_for_sample_polling.set_external_voltage_source(
 				button_instance_name, new_voltage_for_button)
 		var stale_pre_click_sample_count := queued_samples_awaiting_playback_to_wires.size()
 		queued_samples_awaiting_playback_to_wires.clear()
@@ -262,7 +262,7 @@ func _on_schematic_button_pressed(button_instance_name: String) -> void:
 			print("[spice3d] flushed %d pre-click playback sample(s) so the new voltage shows up immediately" % stale_pre_click_sample_count)
 
 
-func push_spice_netlist_and_start_transient_on_web_simulator(
+func push_spice_netlist_and_start_transient_analysis(
 		spice3d_root_node: Node,
 		staged_top_schematic_absolute_path: String,
 		extra_symbol_search_directories: PackedStringArray,
@@ -281,7 +281,7 @@ func push_spice_netlist_and_start_transient_on_web_simulator(
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [
 			netlist_lines.size(), netlist_lines_with_pdk_include.size(),
 			internal_net_names_to_seed_at_half_vdd.size()])
-	spice3d_root_node.push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
+	spice3d_root_node.start_transient_analysis_with_netlist_and_seed_ic_nets(
 			netlist_lines_with_pdk_include,
 			compute_transient_timestep_seconds_for_current_time_warp(),
 			internal_net_names_to_seed_at_half_vdd)
@@ -366,7 +366,7 @@ func accumulate_per_frame_timing_diagnostic(
 
 
 func drain_new_simulator_samples_into_playback_queue_and_return_count() -> int:
-	var drained_samples: Array = spice3d_root_node_for_sample_polling.drain_buffered_simulation_samples_from_web_simulator()
+	var drained_samples: Array = spice3d_root_node_for_sample_polling.drain_buffered_simulation_samples_as_godot_array()
 	if drained_samples.is_empty():
 		return 0
 	queued_samples_awaiting_playback_to_wires.append_array(drained_samples)
