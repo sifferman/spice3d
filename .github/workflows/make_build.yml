@@ -22,18 +22,22 @@ jobs:
             godot-platform: "Linux"
             godot-editor-url-fragment: "linux.x86_64"
             export-output-filename: "spice3d.x86_64"
+            bundle-subdir: "linux_amd64"
           - target: { platform: macos, arch: universal, os: macos-latest }
             godot-platform: "macOS"
             godot-editor-url-fragment: "macos.universal"
             export-output-filename: "spice3d.zip"
+            bundle-subdir: "macos_arm64"
           - target: { platform: windows, arch: x86_64, os: windows-latest }
             godot-platform: "Windows Desktop"
             godot-editor-url-fragment: "win64.exe"
             export-output-filename: "spice3d.exe"
+            bundle-subdir: "windows_amd64"
           - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
             godot-platform: "Web"
             godot-editor-url-fragment: "linux.x86_64"
             export-output-filename: "index.html"
+            bundle-subdir: "web_wasm32"
 
     runs-on: ${{ matrix.target.os }}
     steps:
@@ -336,11 +340,19 @@ jobs:
           cp project/web/*.js build-out/web/
           ls -la build-out/web/
 
+      - name: Restage build output under bundle-subdir for merge layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact-staging
+          mv "build-out/${{ matrix.target.platform }}" "artifact-staging/${{ matrix.bundle-subdir }}"
+          ls -la "artifact-staging/${{ matrix.bundle-subdir }}/"
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: spice3d-${{ matrix.target.platform }}-${{ matrix.target.arch }}
-          path: build-out/${{ matrix.target.platform }}/**
+          name: spice3d-${{ matrix.bundle-subdir }}
+          path: artifact-staging
 
   merge:
     runs-on: ubuntu-22.04
