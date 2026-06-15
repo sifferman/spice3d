@@ -213,6 +213,21 @@ jobs:
           Copy-Item -Recurse -Force "$env:USERPROFILE\godot-export-templates\templates\*" $target
           Get-ChildItem $target | Select-Object -First 10 | Out-Host
 
+      - name: Pre-stage libngspice next to GDExtension before import (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: cp -d third_party/ngspice/build-native/src/.libs/libngspice.so* project/bin/linux/
+
+      - name: Pre-stage libngspice next to GDExtension before import (macos)
+        if: matrix.target.platform == 'macos'
+        shell: bash
+        run: cp -P third_party/ngspice/build-native/src/.libs/libngspice*.dylib project/bin/macos/
+
+      - name: Pre-stage libngspice next to GDExtension before import (windows)
+        if: matrix.target.platform == 'windows'
+        shell: bash
+        run: cp third_party/ngspice/build-native/src/.libs/libngspice*.dll project/bin/windows/
+
       - name: Run Godot project import (linux + web)
         if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
         shell: bash
