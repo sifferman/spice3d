@@ -66,8 +66,17 @@ before invoking scons for a native target (platform={}, expected: {}).""".format
                 env["platform"], ngspice_native_shared_library_path))
         sys.exit(1)
     env.Append(CPPPATH=[ngspice_native_include_directory])
-    env.Append(LIBPATH=[ngspice_native_library_directory])
-    env.Append(LIBS=["ngspice"])
+    if env["platform"] == "windows":
+        # On windows-latest scons emits `-Lthird_party\ngspice\build-native\src\.libs`
+        # but MinGW's ld can't resolve `-lngspice` against the libngspice.dll.a
+        # at that path (possibly path interpretation, possibly scons's
+        # $(...$) signature-mask wrapper losing the -L on cmd). Pass the
+        # import library as an explicit File so the path is unambiguous —
+        # the linker treats files-on-command-line as direct link inputs.
+        env.Append(LIBS=[File(ngspice_native_library_directory + "/libngspice.dll.a")])
+    else:
+        env.Append(LIBPATH=[ngspice_native_library_directory])
+        env.Append(LIBS=["ngspice"])
     if env["platform"] == "linux":
         # RUNPATH order matters: $ORIGIN first so a release artifact that
         # bundles libngspice.so next to libspice3d.so resolves without
