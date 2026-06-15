@@ -66,15 +66,42 @@ generate_mingw_import_library_if_missing() {
 	(cd "$dot_libs_directory" && gendef libngspice-0.dll && dlltool -d libngspice-0.def -l libngspice.dll.a)
 }
 
+rewrite_macos_install_name_to_use_rpath() {
+	# On macOS, libtool stamps the dylib with an install_name like
+	# /usr/local/lib/libngspice.0.dylib (or the build-native abs path).
+	# Linking libspice3d against libngspice copies that install_name verbatim
+	# into libspice3d's load commands; at runtime dyld looks for the exact
+	# absolute path, ignoring our @rpath entries. Rewrite the install_name
+	# to @rpath/libngspice.0.dylib so dyld resolves it via our SConstruct-
+	# emitted RPATHs (@loader_path + the dev-checkout fallback).
+	if [[ "$detected_host_kernel" != "Darwin" ]]; then
+		return
+	fi
+	local dot_libs_directory="$native_build_directory/src/.libs"
+	for one_dylib in "$dot_libs_directory"/libngspice*.dylib; do
+		if [ -L "$one_dylib" ]; then continue; fi
+		install_name_tool -id "@rpath/$(basename "$one_dylib")" "$one_dylib"
+		echo "rewrote install_name on $(basename "$one_dylib") -> @rpath/$(basename "$one_dylib")"
+	done
+}
+
 list_built_shared_library_artifacts() {
 	echo "--- contents of $native_build_directory/src/.libs/ ---"
 	ls -la "$native_build_directory/src/.libs/" || true
+	if [[ "$detected_host_kernel" == "Darwin" ]]; then
+		echo "--- install_name on built dylibs ---"
+		for one_dylib in "$native_build_directory/src/.libs/"libngspice*.dylib; do
+			[ -L "$one_dylib" ] && continue
+			otool -D "$one_dylib" || true
+		done
+	fi
 }
 
 regenerate_configure_script_if_missing
 run_native_configure
 build_ngspice_shared_library_for_native
 generate_mingw_import_library_if_missing
+rewrite_macos_install_name_to_use_rpath
 list_built_shared_library_artifacts
 
 echo
