@@ -110,9 +110,9 @@ jobs:
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
-          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_template_release
+          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_debug_release
 
-      - name: Build GDExtension template_release (linux + macos + web)
+      - name: Build GDExtension template_debug + template_release (linux + macos + web)
         if: matrix.target.platform != 'windows'
         shell: bash
         run: |
@@ -122,19 +122,24 @@ jobs:
           if [ "${{ matrix.target.platform }}" = "web" ]; then
             EXTRA="threads=no"
           fi
+          # Both targets are needed: Godot's headless --import loads the
+          # debug GDExtension to validate the project; --export-release uses
+          # the release one.
+          scons -j"$PARALLEL_JOB_COUNT" target=template_debug   platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single $EXTRA
           scons -j"$PARALLEL_JOB_COUNT" target=template_release platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single $EXTRA
 
-      - name: Build GDExtension template_release (windows, in cmd)
+      - name: Build GDExtension template_debug + template_release (windows, in cmd)
         if: matrix.target.platform == 'windows'
         shell: cmd
         run: |
+          scons -j%NUMBER_OF_PROCESSORS% target=template_debug   platform=windows arch=x86_64 precision=single
           scons -j%NUMBER_OF_PROCESSORS% target=template_release platform=windows arch=x86_64 precision=single
 
       - name: Save .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-save
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
-          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_template_release
+          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_debug_release
 
       - name: Cache Godot editor binary and export templates
         id: cache_godot_editor_and_templates
