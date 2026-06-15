@@ -1,10 +1,13 @@
 # For syntax, see https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 # Manual workflow that builds release-ready, standalone exported binaries
-# of the spice3d application for every platform we ship. Trigger from the
-# Actions tab; download the merged `spice3d` artifact at the end; attach
-# to a GitHub Release.
+# of the spice3d application for every native platform we ship. Trigger
+# from the Actions tab; download the merged `spice3d` artifact at the
+# end; attach to a GitHub Release.
+#
+# The web build is intentionally NOT covered here -- pages.yml builds and
+# deploys the web version to https://ethan.sifferman.dev/spice3d/.
 
-name: Make a GDExtension build for all supported platforms
+name: Make a native build for linux + macos + windows
 on:
   workflow_dispatch:
 
@@ -20,24 +23,16 @@ jobs:
         include:
           - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
             godot-platform: "Linux"
-            godot-editor-url-fragment: "linux.x86_64"
             export-output-filename: "spice3d.x86_64"
             bundle-subdir: "linux_amd64"
           - target: { platform: macos, arch: universal, os: macos-latest }
             godot-platform: "macOS"
-            godot-editor-url-fragment: "macos.universal"
             export-output-filename: "spice3d.zip"
             bundle-subdir: "macos_arm64"
           - target: { platform: windows, arch: x86_64, os: windows-latest }
             godot-platform: "Windows Desktop"
-            godot-editor-url-fragment: "win64.exe"
             export-output-filename: "spice3d.exe"
             bundle-subdir: "windows_amd64"
-          - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
-            godot-platform: "Web"
-            godot-editor-url-fragment: "linux.x86_64"
-            export-output-filename: "index.html"
-            bundle-subdir: "web_wasm32"
 
     runs-on: ${{ matrix.target.os }}
     steps:
@@ -63,8 +58,8 @@ jobs:
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-python
 
-      - name: Install ngspice build prerequisites (linux + web)
-        if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
+      - name: Install ngspice build prerequisites (linux)
+        if: matrix.target.platform == 'linux'
         shell: bash
         run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
 
@@ -79,10 +74,8 @@ jobs:
         uses: ./godot-cpp/.github/actions/setup-godot-cpp
         with:
           platform: ${{ matrix.target.platform }}
-          em-version: 3.1.62
 
       - name: Cache ngspice native build
-        if: matrix.target.platform != 'web'
         id: cache_ngspice_native_build
         uses: actions/cache@v4
         with:
@@ -98,39 +91,23 @@ jobs:
         shell: msys2 {0}
         run: scripts/build-ngspice-for-native.sh
 
-      - name: Cache ngspice emscripten build
-        if: matrix.target.platform == 'web'
-        id: cache_ngspice_emscripten_build
-        uses: actions/cache@v4
-        with:
-          path: third_party/ngspice/build-emscripten
-          key: ngspice-emscripten-${{ hashFiles('scripts/build-ngspice-for-emscripten.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
-
-      - name: Build ngspice for emscripten
-        if: matrix.target.platform == 'web' && steps.cache_ngspice_emscripten_build.outputs.cache-hit != 'true'
-        run: scripts/build-ngspice-for-emscripten.sh
-
       - name: Restore .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_debug_release
 
-      - name: Build GDExtension template_debug + template_release (linux + macos + web)
+      - name: Build GDExtension template_debug + template_release (linux + macos)
         if: matrix.target.platform != 'windows'
         shell: bash
         run: |
           set -e
           PARALLEL_JOB_COUNT="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-          EXTRA=""
-          if [ "${{ matrix.target.platform }}" = "web" ]; then
-            EXTRA="threads=no"
-          fi
           # Both targets are needed: Godot's headless --import loads the
           # debug GDExtension to validate the project; --export-release uses
           # the release one.
-          scons -j"$PARALLEL_JOB_COUNT" target=template_debug   platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single $EXTRA
-          scons -j"$PARALLEL_JOB_COUNT" target=template_release platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single $EXTRA
+          scons -j"$PARALLEL_JOB_COUNT" target=template_debug   platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single
+          scons -j"$PARALLEL_JOB_COUNT" target=template_release platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single
 
       - name: Build GDExtension template_debug + template_release (windows, in cmd)
         if: matrix.target.platform == 'windows'
@@ -154,8 +131,8 @@ jobs:
             ~/godot-export-templates
           key: godot-editor-and-templates-${{ matrix.target.platform }}-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
 
-      - name: Install Godot editor + export templates (linux + web)
-        if: (matrix.target.platform == 'linux' || matrix.target.platform == 'web') && steps.cache_godot_editor_and_templates.outputs.cache-hit != 'true'
+      - name: Install Godot editor + export templates (linux)
+        if: matrix.target.platform == 'linux' && steps.cache_godot_editor_and_templates.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -245,8 +222,8 @@ jobs:
           Copy-Item -Recurse -Force "third_party\gut\addons\gut" "project\addons\gut"
           Get-ChildItem "project\addons\gut" | Select-Object -First 5 | Out-Host
 
-      - name: Run Godot project import (linux + web)
-        if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
+      - name: Run Godot project import (linux)
+        if: matrix.target.platform == 'linux'
         shell: bash
         run: |
           set -e
@@ -271,8 +248,8 @@ jobs:
           $editor = Get-ChildItem "$env:USERPROFILE\godot-editor" -Filter "*.exe" -Recurse | Select-Object -First 1
           & $editor.FullName --headless --import 2>&1 | Select-Object -Last 40
 
-      - name: Export with Godot (linux + web)
-        if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
+      - name: Export with Godot (linux)
+        if: matrix.target.platform == 'linux'
         shell: bash
         run: |
           set -e
@@ -329,60 +306,6 @@ jobs:
           set -e
           cp third_party/ngspice/build-native/src/.libs/libngspice*.dll build-out/windows/
           ls -la build-out/windows/
-
-      - name: Bundle ngspice WASM module next to the exported web build
-        if: matrix.target.platform == 'web'
-        shell: bash
-        run: |
-          set -e
-          cp third_party/ngspice/build-emscripten/ngspice.js build-out/web/
-          cp third_party/ngspice/build-emscripten/ngspice.wasm build-out/web/
-          cp project/web/*.js build-out/web/
-          cp project/web/*.html build-out/web/
-          ls -la build-out/web/
-
-      - name: Install pinned YoWASP yosys + copy bundle into the exported web build
-        if: matrix.target.platform == 'web'
-        shell: bash
-        run: |
-          set -euo pipefail
-          yowasp_yosys_pinned_npm_version="0.65.176-dev.1145"
-          install_scratch_dir="$(mktemp -d)"
-          cd "$install_scratch_dir"
-          npm init -y >/dev/null
-          npm install --no-save --no-audit --no-fund --silent "@yowasp/yosys@${yowasp_yosys_pinned_npm_version}"
-          cd "$GITHUB_WORKSPACE"
-          mkdir -p build-out/web/yowasp/gen build-out/web/yowasp/lib
-          cp "$install_scratch_dir"/node_modules/@yowasp/yosys/gen/*.js \
-             "$install_scratch_dir"/node_modules/@yowasp/yosys/gen/*.wasm \
-             "$install_scratch_dir"/node_modules/@yowasp/yosys/gen/*.tar \
-             build-out/web/yowasp/gen/
-          cp "$install_scratch_dir"/node_modules/@yowasp/yosys/lib/* build-out/web/yowasp/lib/
-          du -sh build-out/web/yowasp
-
-      - name: Inject ngspice_bridge.js + verilog_synth_bridge.js into exported web index.html
-        if: matrix.target.platform == 'web'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          exported_index_html_path = Path('build-out/web/index.html')
-          exported_html = exported_index_html_path.read_text()
-          script_tags_to_inject_in_head_order = [
-              '<script src="ngspice_bridge.js"></script>',
-              '<script src="verilog_synth_bridge.js"></script>',
-          ]
-          for one_script_tag in reversed(script_tags_to_inject_in_head_order):
-              if one_script_tag in exported_html:
-                  continue
-              exported_html = exported_html.replace(
-                  '<head>',
-                  '<head>\n\t' + one_script_tag,
-                  1,
-              )
-          exported_index_html_path.write_text(exported_html)
-          PY
 
       - name: Restage build output under bundle-subdir for merge layout
         shell: bash
