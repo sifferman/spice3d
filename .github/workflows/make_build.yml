@@ -228,6 +228,19 @@ jobs:
         shell: bash
         run: cp third_party/ngspice/build-native/src/.libs/libngspice*.dll project/bin/windows/
 
+      - name: Replace POSIX symlink at project/addons/gut with a real directory (windows)
+        if: matrix.target.platform == 'windows'
+        shell: pwsh
+        run: |
+          $symlinkProxyFile = "project\addons\gut"
+          if (Test-Path $symlinkProxyFile -PathType Leaf) {
+              Remove-Item -Force $symlinkProxyFile
+          } elseif (Test-Path $symlinkProxyFile) {
+              Remove-Item -Recurse -Force $symlinkProxyFile
+          }
+          Copy-Item -Recurse -Force "third_party\gut\addons\gut" "project\addons\gut"
+          Get-ChildItem "project\addons\gut" | Select-Object -First 5 | Out-Host
+
       - name: Run Godot project import (linux + web)
         if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
         shell: bash
@@ -248,9 +261,11 @@ jobs:
         if: matrix.target.platform == 'windows'
         shell: pwsh
         run: |
+          $gdextensionRuntimeLibraryDirectoryForWindows = (Resolve-Path "project\bin\windows").Path
+          $env:PATH = "$gdextensionRuntimeLibraryDirectoryForWindows;$env:PATH"
           cd project
           $editor = Get-ChildItem "$env:USERPROFILE\godot-editor" -Filter "*.exe" -Recurse | Select-Object -First 1
-          & $editor.FullName --headless --import 2>&1 | Select-Object -Last 20
+          & $editor.FullName --headless --import 2>&1 | Select-Object -Last 40
 
       - name: Export with Godot (linux + web)
         if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
@@ -275,9 +290,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "build-out\windows" | Out-Null
+          $gdextensionRuntimeLibraryDirectoryForWindows = (Resolve-Path "project\bin\windows").Path
+          $env:PATH = "$gdextensionRuntimeLibraryDirectoryForWindows;$env:PATH"
           cd project
           $editor = Get-ChildItem "$env:USERPROFILE\godot-editor" -Filter "*.exe" -Recurse | Select-Object -First 1
-          & $editor.FullName --headless --export-release "${{ matrix.godot-platform }}" "..\build-out\windows\${{ matrix.export-output-filename }}" 2>&1 | Select-Object -Last 30
+          & $editor.FullName --headless --export-release "${{ matrix.godot-platform }}" "..\build-out\windows\${{ matrix.export-output-filename }}" 2>&1 | Select-Object -Last 40
 
       - name: Bundle libngspice next to the exported binary (linux)
         if: matrix.target.platform == 'linux'
