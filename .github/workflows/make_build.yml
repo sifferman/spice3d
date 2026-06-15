@@ -208,8 +208,8 @@ jobs:
           Copy-Item -Recurse -Force "$env:USERPROFILE\godot-export-templates\templates\*" $target
           Get-ChildItem $target | Select-Object -First 10 | Out-Host
 
-      - name: Run Godot project import (unix)
-        if: matrix.target.platform != 'windows'
+      - name: Run Godot project import (linux + web)
+        if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
         shell: bash
         run: |
           set -e
@@ -232,8 +232,8 @@ jobs:
           $editor = Get-ChildItem "$env:USERPROFILE\godot-editor" -Filter "*.exe" -Recurse | Select-Object -First 1
           & $editor.FullName --headless --import 2>&1 | Select-Object -Last 20
 
-      - name: Export with Godot (unix)
-        if: matrix.target.platform != 'windows' && matrix.target.platform != 'macos'
+      - name: Export with Godot (linux + web)
+        if: matrix.target.platform == 'linux' || matrix.target.platform == 'web'
         shell: bash
         run: |
           set -e
