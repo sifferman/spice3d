@@ -22,7 +22,7 @@ jobs:
             godot-platform: "Linux"
             godot-editor-url-fragment: "linux.x86_64"
             export-output-filename: "spice3d.x86_64"
-          - target: { platform: macos, arch: arm64, os: macos-latest }
+          - target: { platform: macos, arch: universal, os: macos-latest }
             godot-platform: "macOS"
             godot-editor-url-fragment: "macos.universal"
             export-output-filename: "spice3d.zip"
