@@ -122,21 +122,23 @@ jobs:
           scons-cache: ${{ github.workspace }}/.scons-cache/
           cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
 
-      - name: Build GDExtension
+      - name: Build GDExtension (linux + macos + web)
+        if: matrix.target.platform != 'windows'
         shell: bash
         run: |
           set -e
-          # nproc is unreliable on Windows Git Bash (returns 1 → scons runs
-          # single-threaded → MSVC takes 30+ min on zstd alone). Honour
-          # NUMBER_OF_PROCESSORS (set by Windows) first, then fall back to
-          # nproc / sysctl for Linux / macOS, with a minimum of 2 just in
-          # case.
-          PARALLEL_JOB_COUNT="${NUMBER_OF_PROCESSORS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
+          PARALLEL_JOB_COUNT="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
           EXTRA=""
           if [ "${{ matrix.target.platform }}" = "web" ]; then
             EXTRA="threads=no"
           fi
           scons -j"$PARALLEL_JOB_COUNT" target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }} $EXTRA
+
+      - name: Build GDExtension (windows, in cmd to keep Windows path separators)
+        if: matrix.target.platform == 'windows'
+        shell: cmd
+        run: |
+          scons -j%NUMBER_OF_PROCESSORS% target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }}
 
       - name: Save .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-save
