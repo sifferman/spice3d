@@ -9,6 +9,8 @@
 		"CameraAttributes",
 		"CapsuleMesh",
 		"CollisionShape3D",
+		"Compositor",
+		"ConcavePolygonShape3D",
 		"CylinderMesh",
 		"Geometry2D",
 		"InputEvent",
@@ -22,12 +24,17 @@
 		"Mesh",
 		"MeshConvexDecompositionSettings",
 		"MeshInstance3D",
+		"MultiplayerAPI",
 		"Node",
 		"Node3D",
 		"Node3DGizmo",
 		"OS",
 		"ProjectSettings",
 		"Shader",
-		"StandardMaterial3D"
+		"Skin",
+		"StandardMaterial3D",
+		"TextServer",
+		"Texture",
+		"Texture2D"
 	]
 }
