@@ -56,6 +56,7 @@ jobs:
             bison
             flex
             mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-lld
             mingw-w64-ucrt-x86_64-python
 
       - name: Install ngspice build prerequisites (linux)

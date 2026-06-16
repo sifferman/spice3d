@@ -10,13 +10,7 @@ projectdir = "project"
 
 localEnv = Environment(tools=["default"], PLATFORM="")
 
-# Build profiles can be used to decrease compile times.
-# You can either specify "disabled_classes", OR
-# explicitly specify "enabled_classes" which disables all other classes.
-# Modify the example file as needed and uncomment the line below or
-# manually specify the build_profile parameter when running SCons.
-
-# localEnv["build_profile"] = "build_profile.json"
+localEnv["build_profile"] = "build_profile.json"
 
 customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
@@ -74,6 +68,10 @@ before invoking scons for a native target (platform={}, expected: {}).""".format
         # import library as an explicit File so the path is unambiguous —
         # the linker treats files-on-command-line as direct link inputs.
         env.Append(LIBS=[File(ngspice_native_library_directory + "/libngspice.dll.a")])
+        # GNU ld is single-threaded and brutally slow on Windows MinGW with
+        # godot-cpp-sized link inputs. LLD links the same DLL in seconds
+        # instead of tens of minutes; -fuse-ld=lld picks it up via gcc.
+        env.Append(LINKFLAGS=["-fuse-ld=lld"])
     else:
         env.Append(LIBPATH=[ngspice_native_library_directory])
         env.Append(LIBS=["ngspice"])

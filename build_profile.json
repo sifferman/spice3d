@@ -1,9 +1,27 @@
 {
-	"_": "This is an example build profile and not used by default. See the SConstruct file for more information.",
-	"type": "feature_profile",
 	"enabled_classes": [
+		"Area3D",
+		"ArrayMesh",
+		"BaseMaterial3D",
+		"BoxMesh",
+		"BoxShape3D",
+		"Camera3D",
+		"CapsuleMesh",
+		"CollisionShape3D",
+		"CylinderMesh",
+		"Geometry2D",
+		"InputEvent",
+		"InputEventMouseButton",
+		"InputEventMouseMotion",
+		"JavaScriptBridge",
+		"JSON",
+		"Label3D",
+		"Material",
+		"Mesh",
+		"MeshInstance3D",
+		"Node",
 		"Node3D",
-		"ImageTexture",
-		"OS"
+		"ProjectSettings",
+		"StandardMaterial3D"
 	]
 }
