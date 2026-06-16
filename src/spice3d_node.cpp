@@ -1,5 +1,8 @@
 #include "spice3d_node.h"
 
+#include <algorithm>
+#include <cctype>
+
 #include "godot_cpp/classes/input_event_mouse_button.hpp"
 #include "godot_cpp/classes/java_script_bridge.hpp"
 #include "godot_cpp/classes/json.hpp"
@@ -421,6 +424,33 @@ godot::Array Spice3DNode::drain_buffered_simulation_samples_as_godot_array() {
 		if (parsed.get_type() == godot::Variant::ARRAY) {
 			drained_samples_as_godot_array = static_cast<godot::Array>(parsed);
 		}
+	}
+#else
+	if (!simulator) return drained_samples_as_godot_array;
+	const SimulationNodeNames *node_names_ptr = simulator->get_node_names_when_ready();
+	const std::vector<SimulationSample> drained_native_samples = simulator->take_buffered_samples();
+	for (const SimulationSample &one_native_sample : drained_native_samples) {
+		godot::Dictionary node_voltages_by_name;
+		if (node_names_ptr != nullptr) {
+			const std::size_t pairable_node_count = std::min(
+					node_names_ptr->ordered_node_names.size(), one_native_sample.node_voltages.size());
+			for (std::size_t node_index = 0; node_index < pairable_node_count; ++node_index) {
+				std::string lowercased_node_name = node_names_ptr->ordered_node_names[node_index];
+				std::transform(
+						lowercased_node_name.begin(),
+						lowercased_node_name.end(),
+						lowercased_node_name.begin(),
+						[](unsigned char character) {
+							return static_cast<char>(std::tolower(character));
+						});
+				node_voltages_by_name[godot::String(lowercased_node_name.c_str())] =
+						one_native_sample.node_voltages[node_index];
+			}
+		}
+		godot::Dictionary one_decorated_sample;
+		one_decorated_sample["simulationTimeSeconds"] = one_native_sample.simulation_time_seconds;
+		one_decorated_sample["nodeVoltagesByName"] = node_voltages_by_name;
+		drained_samples_as_godot_array.push_back(one_decorated_sample);
 	}
 #endif
 	return drained_samples_as_godot_array;
