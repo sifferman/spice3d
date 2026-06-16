@@ -6,6 +6,7 @@
 		"BoxMesh",
 		"BoxShape3D",
 		"Camera3D",
+		"CameraAttributes",
 		"CapsuleMesh",
 		"CollisionShape3D",
 		"CylinderMesh",
@@ -14,14 +15,19 @@
 		"InputEventMouseButton",
 		"InputEventMouseMotion",
 		"JavaScriptBridge",
+		"JavaScriptObject",
 		"JSON",
 		"Label3D",
 		"Material",
 		"Mesh",
+		"MeshConvexDecompositionSettings",
 		"MeshInstance3D",
 		"Node",
 		"Node3D",
+		"Node3DGizmo",
+		"OS",
 		"ProjectSettings",
+		"Shader",
 		"StandardMaterial3D"
 	]
 }
