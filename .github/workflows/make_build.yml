@@ -99,6 +99,8 @@ jobs:
 
       - name: Build GDExtension template_debug + template_release (linux + macos)
         if: matrix.target.platform != 'windows'
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
         shell: bash
         run: |
           set -e
@@ -111,6 +113,8 @@ jobs:
 
       - name: Build GDExtension template_debug + template_release (windows, in cmd)
         if: matrix.target.platform == 'windows'
+        env:
+          SCONS_CACHE: ${{ github.workspace }}\.scons-cache\
         shell: cmd
         run: |
           scons -j%NUMBER_OF_PROCESSORS% target=template_debug   platform=windows arch=x86_64 precision=single
