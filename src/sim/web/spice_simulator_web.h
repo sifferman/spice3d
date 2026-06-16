@@ -13,9 +13,10 @@ public:
 	WebWorkerSpiceSimulator();
 	~WebWorkerSpiceSimulator() override;
 
-	void install_file_text_in_simulator_filesystem(
-			const std::string &virtual_path_in_simulator_filesystem,
-			const std::string &file_content) override;
+	void expose_persistent_directory_to_simulator(
+			const std::string &user_relative_directory_path) override;
+	std::string resolve_simulator_include_path_for_persistent_resource(
+			const std::string &user_relative_path) const override;
 	bool start_transient_analysis_with_netlist_and_seed_ic_nets(
 			const std::vector<std::string> &netlist_lines,
 			double transient_timestep_seconds,

@@ -9,6 +9,18 @@
 
 #include <ngspice/sharedspice.h>
 
+#include "godot_cpp/classes/project_settings.hpp"
+#include "godot_cpp/variant/utility_functions.hpp"
+
+namespace {
+
+std::string godot_string_to_std_string_utf8(const godot::String &source) {
+	const godot::CharString utf8 = source.utf8();
+	return std::string(utf8.get_data(), static_cast<std::size_t>(utf8.length()));
+}
+
+} // namespace
+
 namespace spice3d {
 namespace native {
 
@@ -113,6 +125,8 @@ LibngspiceSpiceSimulator::~LibngspiceSpiceSimulator() {
 namespace {
 
 constexpr double EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS = 1.0e6;
+constexpr double SEED_INITIAL_CONDITION_HIGH_VOLTS = 1.8;
+constexpr double SEED_INITIAL_CONDITION_LOW_VOLTS = 0.0;
 
 bool load_netlist_lines_into_ngspice(
 		const std::vector<std::string> &netlist_lines,
@@ -121,28 +135,86 @@ bool load_netlist_lines_into_ngspice(
 
 bool start_or_restart_background_transient(
 		double transient_timestep_seconds,
-		double stop_time_seconds);
+		double stop_time_seconds,
+		bool use_initial_conditions);
+
+std::vector<std::string> build_netlist_with_alternating_initial_condition_lines_for_internal_nets(
+		const std::vector<std::string> &original_netlist_lines,
+		const std::vector<std::string> &internal_net_names_to_seed_at_half_vdd) {
+	if (internal_net_names_to_seed_at_half_vdd.empty()) {
+		return original_netlist_lines;
+	}
+	std::vector<std::string> initial_condition_lines;
+	initial_condition_lines.reserve(internal_net_names_to_seed_at_half_vdd.size());
+	for (std::size_t one_net_index = 0; one_net_index < internal_net_names_to_seed_at_half_vdd.size(); ++one_net_index) {
+		const double seed_voltage_for_this_net = (one_net_index % 2 == 0)
+				? SEED_INITIAL_CONDITION_HIGH_VOLTS
+				: SEED_INITIAL_CONDITION_LOW_VOLTS;
+		char one_initial_condition_line_buffer[256];
+		std::snprintf(
+				one_initial_condition_line_buffer,
+				sizeof(one_initial_condition_line_buffer),
+				".ic v(%s)=%.6f",
+				internal_net_names_to_seed_at_half_vdd[one_net_index].c_str(),
+				seed_voltage_for_this_net);
+		initial_condition_lines.emplace_back(one_initial_condition_line_buffer);
+	}
+	std::vector<std::string> augmented_netlist_lines;
+	augmented_netlist_lines.reserve(original_netlist_lines.size() + initial_condition_lines.size());
+	bool initial_condition_lines_have_been_inserted = false;
+	for (const auto &one_original_line : original_netlist_lines) {
+		std::string stripped_lowercase_line;
+		stripped_lowercase_line.reserve(one_original_line.size());
+		for (char one_character : one_original_line) {
+			if (std::isspace(static_cast<unsigned char>(one_character))) continue;
+			stripped_lowercase_line.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(one_character))));
+		}
+		if (!initial_condition_lines_have_been_inserted
+				&& (stripped_lowercase_line == ".end" || stripped_lowercase_line.rfind(".end ", 0) == 0)) {
+			for (const auto &one_initial_condition_line : initial_condition_lines) {
+				augmented_netlist_lines.push_back(one_initial_condition_line);
+			}
+			initial_condition_lines_have_been_inserted = true;
+		}
+		augmented_netlist_lines.push_back(one_original_line);
+	}
+	if (!initial_condition_lines_have_been_inserted) {
+		for (const auto &one_initial_condition_line : initial_condition_lines) {
+			augmented_netlist_lines.push_back(one_initial_condition_line);
+		}
+	}
+	return augmented_netlist_lines;
+}
 
 } // namespace
 
-void LibngspiceSpiceSimulator::install_file_text_in_simulator_filesystem(
-		const std::string &virtual_path_in_simulator_filesystem,
-		const std::string &file_content) {
-	(void)virtual_path_in_simulator_filesystem;
-	(void)file_content;
+void LibngspiceSpiceSimulator::expose_persistent_directory_to_simulator(
+		const std::string &user_relative_directory_path) {
+	(void)user_relative_directory_path;
+}
+
+std::string LibngspiceSpiceSimulator::resolve_simulator_include_path_for_persistent_resource(
+		const std::string &user_relative_path) const {
+	const godot::String user_uri = godot::String("user://") + godot::String(user_relative_path.c_str());
+	const godot::String globalized = godot::ProjectSettings::get_singleton()->globalize_path(user_uri);
+	return godot_string_to_std_string_utf8(globalized);
 }
 
 bool LibngspiceSpiceSimulator::start_transient_analysis_with_netlist_and_seed_ic_nets(
 		const std::vector<std::string> &netlist_lines,
 		double transient_timestep_seconds,
 		const std::vector<std::string> &internal_net_names_to_seed_at_half_vdd) {
-	(void)internal_net_names_to_seed_at_half_vdd;
-	if (!load_netlist_lines_into_ngspice(netlist_lines, ngspice_has_been_initialized, this)) {
+	const std::vector<std::string> augmented_netlist_lines =
+			build_netlist_with_alternating_initial_condition_lines_for_internal_nets(
+					netlist_lines, internal_net_names_to_seed_at_half_vdd);
+	if (!load_netlist_lines_into_ngspice(augmented_netlist_lines, ngspice_has_been_initialized, this)) {
 		return false;
 	}
 	stop_has_been_requested = false;
 	return start_or_restart_background_transient(
-			transient_timestep_seconds, EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS);
+			transient_timestep_seconds,
+			EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS,
+			!internal_net_names_to_seed_at_half_vdd.empty());
 }
 
 bool LibngspiceSpiceSimulator::update_transient_timestep_mid_simulation(double new_timestep_seconds) {
@@ -151,7 +223,7 @@ bool LibngspiceSpiceSimulator::update_transient_timestep_mid_simulation(double n
 		ngSpice_Command(const_cast<char *>("bg_halt"));
 	}
 	return start_or_restart_background_transient(
-			new_timestep_seconds, EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS);
+			new_timestep_seconds, EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS, false);
 }
 
 namespace {
@@ -190,17 +262,20 @@ bool load_netlist_lines_into_ngspice(
 
 bool start_or_restart_background_transient(
 		double transient_timestep_seconds,
-		double stop_time_seconds) {
+		double stop_time_seconds,
+		bool use_initial_conditions) {
 	ngSpice_Command(const_cast<char *>("save none"));
 	ngSpice_Command(const_cast<char *>("esave node"));
 
-	char transient_command_buffer[128];
+	char transient_command_buffer[160];
 	std::snprintf(
 			transient_command_buffer,
 			sizeof(transient_command_buffer),
-			"bg_tran %.15g %.15g",
+			"bg_tran %.15g %.15g 0 %.15g%s",
 			transient_timestep_seconds,
-			stop_time_seconds);
+			stop_time_seconds,
+			transient_timestep_seconds,
+			use_initial_conditions ? " uic" : "");
 	return ngSpice_Command(transient_command_buffer) == 0;
 }
 
@@ -230,8 +305,15 @@ const SimulationNodeNames *LibngspiceSpiceSimulator::get_node_names_when_ready()
 	return node_names_are_ready.load() ? &simulation_node_names : nullptr;
 }
 
-void LibngspiceSpiceSimulator::receive_log_message(const char *) {}
-void LibngspiceSpiceSimulator::receive_status_message(const char *) {}
+void LibngspiceSpiceSimulator::receive_log_message(const char *message_text) {
+	if (!message_text) return;
+	godot::UtilityFunctions::print(godot::String("[ngspice] ") + godot::String(message_text));
+}
+
+void LibngspiceSpiceSimulator::receive_status_message(const char *message_text) {
+	if (!message_text) return;
+	godot::UtilityFunctions::print(godot::String("[ngspice:status] ") + godot::String(message_text));
+}
 
 void LibngspiceSpiceSimulator::receive_simulation_sample(
 		double simulation_time_seconds,

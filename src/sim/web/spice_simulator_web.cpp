@@ -2,9 +2,13 @@
 
 #ifdef WEB_ENABLED
 
+#include "godot_cpp/classes/dir_access.hpp"
+#include "godot_cpp/classes/file_access.hpp"
 #include "godot_cpp/classes/java_script_bridge.hpp"
 #include "godot_cpp/classes/json.hpp"
+#include "godot_cpp/variant/packed_string_array.hpp"
 #include "godot_cpp/variant/string.hpp"
+#include "godot_cpp/variant/utility_functions.hpp"
 
 namespace spice3d {
 namespace web {
@@ -13,6 +17,57 @@ namespace {
 
 godot::String std_string_to_godot_string(const std::string &source) {
 	return godot::String(source.c_str());
+}
+
+void install_one_file_text_into_worker_memfs(
+		const godot::String &worker_memfs_absolute_path,
+		const godot::String &file_text_content) {
+	const godot::String set_content_javascript = godot::String(
+			"globalThis.__spice3dStagingFileContent = ")
+			+ godot::JSON::stringify(file_text_content)
+			+ godot::String(";");
+	const godot::String install_javascript = godot::String(
+			"globalThis.spice3d && globalThis.spice3d.installFileTextInWorkerFilesystem(")
+			+ godot::JSON::stringify(worker_memfs_absolute_path)
+			+ godot::String(", globalThis.__spice3dStagingFileContent || \"\");");
+	godot::JavaScriptBridge::get_singleton()->eval(set_content_javascript);
+	godot::JavaScriptBridge::get_singleton()->eval(install_javascript);
+	godot::JavaScriptBridge::get_singleton()->eval("globalThis.__spice3dStagingFileContent = null;");
+}
+
+void recursively_stage_directory_contents_into_worker_memfs(
+		const godot::String &user_directory_uri,
+		const godot::String &worker_memfs_destination_prefix,
+		std::size_t &accumulated_file_count) {
+	godot::Ref<godot::DirAccess> directory_handle = godot::DirAccess::open(user_directory_uri);
+	if (directory_handle.is_null()) {
+		godot::UtilityFunctions::push_warning(
+				godot::String("[spice3d] expose_persistent_directory: cannot open '")
+				+ user_directory_uri + godot::String("'"));
+		return;
+	}
+	directory_handle->list_dir_begin();
+	while (true) {
+		const godot::String one_entry_name = directory_handle->get_next();
+		if (one_entry_name.is_empty()) break;
+		if (one_entry_name.begins_with(".")) continue;
+		const godot::String one_entry_user_uri = user_directory_uri + godot::String("/") + one_entry_name;
+		const godot::String one_entry_worker_memfs_path =
+				worker_memfs_destination_prefix + godot::String("/") + one_entry_name;
+		if (directory_handle->current_is_dir()) {
+			recursively_stage_directory_contents_into_worker_memfs(
+					one_entry_user_uri, one_entry_worker_memfs_path, accumulated_file_count);
+			continue;
+		}
+		godot::Ref<godot::FileAccess> file_handle =
+				godot::FileAccess::open(one_entry_user_uri, godot::FileAccess::READ);
+		if (file_handle.is_null()) continue;
+		const godot::String file_text_content = file_handle->get_as_text();
+		file_handle->close();
+		install_one_file_text_into_worker_memfs(one_entry_worker_memfs_path, file_text_content);
+		++accumulated_file_count;
+	}
+	directory_handle->list_dir_end();
 }
 
 godot::String json_encode_std_string_vector(const std::vector<std::string> &lines) {
@@ -37,20 +92,22 @@ WebWorkerSpiceSimulator::~WebWorkerSpiceSimulator() {
 	stop_simulation();
 }
 
-void WebWorkerSpiceSimulator::install_file_text_in_simulator_filesystem(
-		const std::string &virtual_path_in_simulator_filesystem,
-		const std::string &file_content) {
-	const godot::String set_content_javascript = godot::String(
-			"globalThis.__spice3dStagingFileContent = ")
-			+ godot::JSON::stringify(std_string_to_godot_string(file_content))
-			+ godot::String(";");
-	const godot::String install_javascript = godot::String(
-			"globalThis.spice3d && globalThis.spice3d.installFileTextInWorkerFilesystem(")
-			+ godot::JSON::stringify(std_string_to_godot_string(virtual_path_in_simulator_filesystem))
-			+ godot::String(", globalThis.__spice3dStagingFileContent || \"\");");
-	evaluate_browser_javascript(set_content_javascript);
-	evaluate_browser_javascript(install_javascript);
-	evaluate_browser_javascript("globalThis.__spice3dStagingFileContent = null;");
+void WebWorkerSpiceSimulator::expose_persistent_directory_to_simulator(
+		const std::string &user_relative_directory_path) {
+	const godot::String user_uri = godot::String("user://") + std_string_to_godot_string(user_relative_directory_path);
+	const godot::String worker_memfs_destination_prefix =
+			godot::String("/") + std_string_to_godot_string(user_relative_directory_path);
+	std::size_t staged_file_count = 0;
+	recursively_stage_directory_contents_into_worker_memfs(
+			user_uri, worker_memfs_destination_prefix, staged_file_count);
+	godot::UtilityFunctions::print(
+			godot::String("[spice3d] staged ") + godot::String::num_int64(static_cast<int64_t>(staged_file_count))
+			+ godot::String(" file(s) into worker MEMFS under ") + worker_memfs_destination_prefix);
+}
+
+std::string WebWorkerSpiceSimulator::resolve_simulator_include_path_for_persistent_resource(
+		const std::string &user_relative_path) const {
+	return std::string("/") + user_relative_path;
 }
 
 bool WebWorkerSpiceSimulator::start_transient_analysis_with_netlist_and_seed_ic_nets(

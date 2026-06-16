@@ -169,10 +169,13 @@ void Spice3DNode::_bind_methods() {
 			godot::D_METHOD("drain_buffered_simulation_samples_as_godot_array"),
 			&Spice3DNode::drain_buffered_simulation_samples_as_godot_array);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("install_file_text_in_simulator_filesystem",
-					"virtual_path_in_simulator_filesystem",
-					"file_content"),
-			&Spice3DNode::install_file_text_in_simulator_filesystem);
+			godot::D_METHOD("expose_persistent_directory_to_simulator",
+					"user_relative_directory_path"),
+			&Spice3DNode::expose_persistent_directory_to_simulator);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("resolve_simulator_include_path_for_persistent_resource",
+					"user_relative_path"),
+			&Spice3DNode::resolve_simulator_include_path_for_persistent_resource);
 	godot::ClassDB::bind_method(
 			godot::D_METHOD("apply_node_voltages_to_wire_colors",
 					"schematic_root_node",
@@ -387,16 +390,23 @@ void Spice3DNode::set_external_voltage_source(const godot::String &source_name, 
 	simulator->set_external_voltage_source(godot_string_to_std_string(source_name), volts);
 }
 
-bool Spice3DNode::install_file_text_in_simulator_filesystem(
-		const godot::String &virtual_path_in_simulator_filesystem,
-		const godot::String &file_content) {
+void Spice3DNode::expose_persistent_directory_to_simulator(
+		const godot::String &user_relative_directory_path) {
 	if (!simulator) {
 		simulator = SpiceSimulator::create_for_current_platform();
 	}
-	simulator->install_file_text_in_simulator_filesystem(
-			godot_string_to_std_string(virtual_path_in_simulator_filesystem),
-			godot_string_to_std_string(file_content));
-	return true;
+	simulator->expose_persistent_directory_to_simulator(
+			godot_string_to_std_string(user_relative_directory_path));
+}
+
+godot::String Spice3DNode::resolve_simulator_include_path_for_persistent_resource(
+		const godot::String &user_relative_path) {
+	if (!simulator) {
+		simulator = SpiceSimulator::create_for_current_platform();
+	}
+	const std::string resolved = simulator->resolve_simulator_include_path_for_persistent_resource(
+			godot_string_to_std_string(user_relative_path));
+	return godot::String(resolved.c_str());
 }
 
 godot::Array Spice3DNode::drain_buffered_simulation_samples_as_godot_array() {

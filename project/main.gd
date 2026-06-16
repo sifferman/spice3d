@@ -169,8 +169,10 @@ func _ready() -> void:
 			staged_top_schematic_absolute_path,
 			"",
 			extra_symbol_search_directories)
-	set_status_label_text_to_loading_phase("Staging PDK into ngspice")
-	PdkStaging.stage_pdk_family_files_into_web_simulator_filesystem(
+	set_status_label_text_to_loading_phase("Exposing PDK to ngspice")
+	PdkStaging.expose_pdk_family_to_simulator(
+			spice3d_root_node, pdk_family_name, pdk_ciel_version)
+	var simulator_pdk_include_path_prefix: String = PdkStaging.simulator_include_path_prefix_for_pdk_family(
 			spice3d_root_node, pdk_family_name, pdk_ciel_version)
 	var verilog_modules_to_synthesize_for_active_example := VerilogSynthesizedSubcktStaging.verilog_modules_to_synthesize_for_example(
 			active_example_metadata())
@@ -188,7 +190,8 @@ func _ready() -> void:
 			spice3d_root_node,
 			staged_top_schematic_absolute_path,
 			extra_symbol_search_directories,
-			synthesized_verilog_subckt_definition_lines)
+			synthesized_verilog_subckt_definition_lines,
+			simulator_pdk_include_path_prefix)
 	loaded_schematic_pending_ready_transition_on_first_sample = loaded_schematic
 	spice3d_root_node_pending_ready_transition_on_first_sample = spice3d_root_node
 	set_status_label_text_to_loading_phase("Waiting for first ngspice sample to come back")
@@ -266,7 +269,8 @@ func push_spice_netlist_and_start_transient_analysis(
 		spice3d_root_node: Node,
 		staged_top_schematic_absolute_path: String,
 		extra_symbol_search_directories: PackedStringArray,
-		synthesized_verilog_subckt_definition_lines: PackedStringArray) -> void:
+		synthesized_verilog_subckt_definition_lines: PackedStringArray,
+		simulator_pdk_include_path_prefix: String) -> void:
 	spice3d_root_node_for_sample_polling = spice3d_root_node
 	var netlist_lines: PackedStringArray = spice3d_root_node.generate_spice_netlist_for_schematic_file(
 			staged_top_schematic_absolute_path, "", extra_symbol_search_directories)
@@ -275,7 +279,7 @@ func push_spice_netlist_and_start_transient_analysis(
 		return
 	var pdk_family_name := active_example_pdk_family_name()
 	var netlist_lines_with_pdk_include := XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			netlist_lines, pdk_family_name, synthesized_verilog_subckt_definition_lines)
+			netlist_lines, pdk_family_name, simulator_pdk_include_path_prefix, synthesized_verilog_subckt_definition_lines)
 	var internal_net_names_to_seed_at_half_vdd := XschemNetlistTransformer.extract_internal_net_names_from_subckt_netlist(
 			netlist_lines, pdk_family_name)
 	print("[spice3d] generated netlist with %d lines (after PDK include: %d, seed-IC nets: %d)" % [

@@ -520,57 +520,22 @@ func download_url_as_byte_array(url: String) -> PackedByteArray:
 	return response_body
 
 
-static func stage_pdk_family_files_into_web_simulator_filesystem(
+static func expose_pdk_family_to_simulator(
 		spice3d_root_node: Node,
 		pdk_family_name: String,
 		ciel_version: String) -> void:
 	var spec := family_spec_for(pdk_family_name)
-	var pdk_filesystem_root_path := absolute_path_for_pdk_family_local_cache_root(pdk_family_name, ciel_version)
-	var total_staged_file_count := 0
 	for one_pdk_subdirectory in spec["pdk_source_subdirectories_relative_to_ciel_root_to_stage_into_worker"]:
-		var source_directory_absolute_path: String = pdk_filesystem_root_path + one_pdk_subdirectory
-		var virtual_directory_inside_worker: String = one_pdk_subdirectory
-		var staged_file_count_for_this_subdirectory := stage_text_files_recursively_into_worker_filesystem(
-				spice3d_root_node,
-				source_directory_absolute_path,
-				virtual_directory_inside_worker)
-		total_staged_file_count += staged_file_count_for_this_subdirectory
-	print("[spice3d] staged %d %s PDK file(s) into worker MEMFS" % [
-			total_staged_file_count, pdk_family_name])
+		var user_relative_subdir: String = "%s/%s%s" % [pdk_family_name, ciel_version, one_pdk_subdirectory]
+		spice3d_root_node.expose_persistent_directory_to_simulator(user_relative_subdir)
 
 
-static func stage_text_files_recursively_into_worker_filesystem(
+static func simulator_include_path_prefix_for_pdk_family(
 		spice3d_root_node: Node,
-		real_source_directory_absolute_path: String,
-		virtual_destination_directory_path_inside_worker: String) -> int:
-	var directory_handle := DirAccess.open(real_source_directory_absolute_path)
-	if directory_handle == null:
-		push_warning("[spice3d] cannot open '%s' for PDK staging" % real_source_directory_absolute_path)
-		return 0
-	directory_handle.list_dir_begin()
-	var staged_file_count := 0
-	while true:
-		var one_entry_name := directory_handle.get_next()
-		if one_entry_name.is_empty():
-			break
-		if one_entry_name.begins_with("."):
-			continue
-		var one_entry_real_path := real_source_directory_absolute_path + "/" + one_entry_name
-		var one_entry_virtual_path := virtual_destination_directory_path_inside_worker + "/" + one_entry_name
-		if directory_handle.current_is_dir():
-			staged_file_count += stage_text_files_recursively_into_worker_filesystem(
-					spice3d_root_node, one_entry_real_path, one_entry_virtual_path)
-			continue
-		var one_file_handle := FileAccess.open(one_entry_real_path, FileAccess.READ)
-		if one_file_handle == null:
-			continue
-		var one_file_text_content := one_file_handle.get_as_text()
-		one_file_handle.close()
-		spice3d_root_node.install_file_text_in_simulator_filesystem(
-				one_entry_virtual_path, one_file_text_content)
-		staged_file_count += 1
-	directory_handle.list_dir_end()
-	return staged_file_count
+		pdk_family_name: String,
+		ciel_version: String) -> String:
+	var user_relative_root: String = "%s/%s" % [pdk_family_name, ciel_version]
+	return spice3d_root_node.resolve_simulator_include_path_for_persistent_resource(user_relative_root)
 
 
 class AllParallelHttpRequestsFinishedSignalEmitter:

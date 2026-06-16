@@ -52,9 +52,10 @@ public:
 	void stop_simulation();
 	void set_external_voltage_source(const godot::String &source_name, double volts);
 	godot::Array drain_buffered_simulation_samples_as_godot_array();
-	bool install_file_text_in_simulator_filesystem(
-			const godot::String &virtual_path_in_simulator_filesystem,
-			const godot::String &file_content);
+	void expose_persistent_directory_to_simulator(
+			const godot::String &user_relative_directory_path);
+	godot::String resolve_simulator_include_path_for_persistent_resource(
+			const godot::String &user_relative_path);
 	void apply_node_voltages_to_wire_colors(
 			godot::Node3D *schematic_root_node,
 			const godot::Dictionary &spice_node_name_to_voltage,
