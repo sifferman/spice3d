@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 #include <ngspice/sharedspice.h>
 
@@ -120,6 +122,17 @@ LibngspiceSpiceSimulator::LibngspiceSpiceSimulator() = default;
 
 LibngspiceSpiceSimulator::~LibngspiceSpiceSimulator() {
 	stop_simulation();
+	wait_for_background_thread_to_finish_before_freeing_instance_state();
+}
+
+void LibngspiceSpiceSimulator::wait_for_background_thread_to_finish_before_freeing_instance_state() {
+	constexpr int MAX_HUNDRED_MICROSECOND_POLLS_BEFORE_GIVING_UP_TO_AVOID_HANG = 50000;
+	for (int poll_attempt = 0;
+			poll_attempt < MAX_HUNDRED_MICROSECOND_POLLS_BEFORE_GIVING_UP_TO_AVOID_HANG;
+			++poll_attempt) {
+		if (!background_thread_is_running.load()) return;
+		std::this_thread::sleep_for(std::chrono::microseconds(100));
+	}
 }
 
 namespace {

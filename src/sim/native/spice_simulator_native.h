@@ -60,6 +60,8 @@ private:
 	std::unordered_map<std::string, double> external_voltage_sources_by_name;
 
 	bool ngspice_has_been_initialized = false;
+
+	void wait_for_background_thread_to_finish_before_freeing_instance_state();
 };
 
 } // namespace native
