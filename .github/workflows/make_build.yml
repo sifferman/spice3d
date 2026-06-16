@@ -277,13 +277,26 @@ jobs:
           $editor = Get-ChildItem "$env:USERPROFILE\godot-editor" -Filter "*.exe" -Recurse | Select-Object -First 1
           & $editor.FullName --headless --export-release "${{ matrix.godot-platform }}" "..\build-out\windows\${{ matrix.export-output-filename }}" 2>&1 | Select-Object -Last 40
 
-      - name: Bundle libngspice next to the exported binary (linux)
+      - name: Relocate GDExtension shared object to match manifest path (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Godot's desktop export drops the GDExtension shared object at the
+          # export root, but the .pck manifest still resolves to
+          # res://bin/linux/libspice3d... — so at runtime Godot fails with
+          # "Can't open dynamic library". Move it into bin/linux/ to match.
+          mkdir -p build-out/linux/bin/linux
+          mv build-out/linux/libspice3d.linux.template_release.x86_64.so build-out/linux/bin/linux/
+
+      - name: Bundle libngspice next to the relocated GDExtension (linux)
         if: matrix.target.platform == 'linux'
         shell: bash
         run: |
           set -e
-          cp -d third_party/ngspice/build-native/src/.libs/libngspice.so* build-out/linux/
+          cp -d third_party/ngspice/build-native/src/.libs/libngspice.so* build-out/linux/bin/linux/
           ls -la build-out/linux/
+          ls -la build-out/linux/bin/linux/
 
       - name: Bundle libngspice next to the exported binary (macos)
         if: matrix.target.platform == 'macos'
@@ -299,13 +312,25 @@ jobs:
           rm -rf build-out/macos/extracted
           ls -la build-out/macos/
 
+      - name: Relocate GDExtension shared object to match manifest path (windows)
+        if: matrix.target.platform == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-out/windows/bin/windows
+          mv build-out/windows/spice3d.windows.template_release.x86_64.dll build-out/windows/bin/windows/
+
       - name: Bundle libngspice next to the exported binary (windows)
         if: matrix.target.platform == 'windows'
         shell: bash
         run: |
           set -e
+          # libngspice-0.dll stays next to spice3d.exe so Windows' DLL search
+          # (which checks the loading EXE's directory) can resolve it when
+          # bin/windows/spice3d.windows...dll declares it as an import.
           cp third_party/ngspice/build-native/src/.libs/libngspice*.dll build-out/windows/
           ls -la build-out/windows/
+          ls -la build-out/windows/bin/windows/
 
       - name: Restage build output under bundle-subdir for merge layout
         shell: bash
