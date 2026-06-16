@@ -336,6 +336,21 @@ jobs:
           ls -la build-out/windows/
           ls -la build-out/windows/bin/windows/
 
+      - name: Bundle MinGW UCRT64 runtime DLLs that libngspice-0.dll depends on (windows)
+        if: matrix.target.platform == 'windows'
+        shell: msys2 {0}
+        run: |
+          # libngspice-0.dll was built by autotools without -static-libgcc /
+          # -static-libstdc++, so it imports libgcc_s_seh-1.dll, libstdc++-6.dll,
+          # and libwinpthread-1.dll from MSYS2's ucrt64. Vanilla Windows machines
+          # don't have these, so dlopen fails with Error 126. Ship them next
+          # to spice3d.exe so Windows' DLL search resolves them.
+          set -e
+          cp /ucrt64/bin/libgcc_s_seh-1.dll build-out/windows/
+          cp /ucrt64/bin/libstdc++-6.dll   build-out/windows/
+          cp /ucrt64/bin/libwinpthread-1.dll build-out/windows/
+          ls -la build-out/windows/
+
       - name: Restage build output under bundle-subdir for merge layout
         shell: bash
         run: |
