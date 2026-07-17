@@ -5,7 +5,9 @@ name: Continuous Integration
 on:
   workflow_call:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
   merge_group:
 
 jobs:
@@ -18,19 +20,19 @@ jobs:
         # By building just with a few combinations, we only need a few runners,
         # while still achieving adequate coverage.
         # To make a full build with all combinations, use the make_build.yml workflow instead.
+        # Native builds (linux/macos/windows/android/ios) all need libngspice
+        # cross-compiled for the target platform. We only have a host-native
+        # build path today (scripts/build-ngspice-for-native.sh), so this
+        # matrix is limited to platforms where we actually exercise + ship:
+        #   - linux  — used for the GUT/editor + host-side build in pages.yml
+        #   - web    — the deployed target
+        # The full all-platforms matrix lives in make_build.yml (manual
+        # dispatch). Adding macos/windows/android/ios back here requires
+        # cross-compiling ngspice for each target first.
         include:
           - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
             target-type: template_debug
             float-precision: double
-          - target: { platform: windows, arch: x86_64, os: windows-latest }
-            target-type: template_release
-            float-precision: single
-          - target: { platform: macos, arch: universal, os: macos-latest }
-            target-type: template_debug
-            float-precision: single
-          - target: { platform: android, arch: arm64, os: ubuntu-22.04 }
-            target-type: template_debug
-            float-precision: single
           - target: { platform: web, arch: wasm32, os: ubuntu-22.04 }
             target-type: template_release
             float-precision: double
@@ -65,6 +67,22 @@ jobs:
         with:
           platform: ${{ matrix.target.platform }}
           em-version: 3.1.62
+
+      - name: Install ngspice build prerequisites
+        if: matrix.target.platform != 'web'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
+
+      - name: Cache ngspice native build
+        if: matrix.target.platform != 'web'
+        id: cache_ngspice_native_build
+        uses: actions/cache@v4
+        with:
+          path: third_party/ngspice/build-native
+          key: ngspice-native-${{ hashFiles('scripts/build-ngspice-for-native.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+
+      - name: Build ngspice for native
+        if: matrix.target.platform != 'web' && steps.cache_ngspice_native_build.outputs.cache-hit != 'true'
+        run: scripts/build-ngspice-for-native.sh
 
       # Build GDExtension (with caches)
 

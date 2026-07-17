@@ -10,13 +10,7 @@ projectdir = "project"
 
 localEnv = Environment(tools=["default"], PLATFORM="")
 
-# Build profiles can be used to decrease compile times.
-# You can either specify "disabled_classes", OR
-# explicitly specify "enabled_classes" which disables all other classes.
-# Modify the example file as needed and uncomment the line below or
-# manually specify the build_profile parameter when running SCons.
-
-# localEnv["build_profile"] = "build_profile.json"
+localEnv["build_profile"] = "build_profile.json"
 
 customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
@@ -38,6 +32,68 @@ Run the following command to download godot-cpp:
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
 env.Append(CPPPATH=["src/", "third_party/xschem2spice/src/", "third_party/zstd/lib/"])
+
+# Native builds (linux/macos/windows) link libngspice for the
+# LibngspiceSpiceSimulator. Web build uses the ngspice WASM module loaded
+# in a Worker instead. Require `scripts/build-ngspice-for-native.sh` to
+# have been run first; SConstruct refuses to proceed if its artifacts are
+# missing so the failure mode is "obvious early" rather than a cryptic
+# undefined-reference link error later.
+if env["platform"] != "web":
+    ngspice_native_include_directory = "third_party/ngspice/src/include"
+    ngspice_native_library_directory = "third_party/ngspice/build-native/src/.libs"
+    if env["platform"] == "macos":
+        ngspice_native_shared_library_filename = "libngspice.dylib"
+    elif env["platform"] == "windows":
+        ngspice_native_shared_library_filename = "libngspice-0.dll"
+    else:
+        ngspice_native_shared_library_filename = "libngspice.so"
+    ngspice_native_shared_library_path = (
+            ngspice_native_library_directory + "/" + ngspice_native_shared_library_filename)
+    if not (os.path.isdir(ngspice_native_include_directory)
+            and os.path.isfile(ngspice_native_shared_library_path)):
+        print_error("""ngspice native build is missing. Run:
+
+    scripts/build-ngspice-for-native.sh
+
+before invoking scons for a native target (platform={}, expected: {}).""".format(
+                env["platform"], ngspice_native_shared_library_path))
+        sys.exit(1)
+    env.Append(CPPPATH=[ngspice_native_include_directory])
+    if env["platform"] == "windows":
+        # On windows-latest scons emits `-Lthird_party\ngspice\build-native\src\.libs`
+        # but MinGW's ld can't resolve `-lngspice` against the libngspice.dll.a
+        # at that path (possibly path interpretation, possibly scons's
+        # $(...$) signature-mask wrapper losing the -L on cmd). Pass the
+        # import library as an explicit File so the path is unambiguous —
+        # the linker treats files-on-command-line as direct link inputs.
+        env.Append(LIBS=[File(ngspice_native_library_directory + "/libngspice.dll.a")])
+        # GNU ld is single-threaded and brutally slow on Windows MinGW with
+        # godot-cpp-sized link inputs. LLD links the same DLL in seconds
+        # instead of tens of minutes; -fuse-ld=lld picks it up via gcc.
+        env.Append(LINKFLAGS=["-fuse-ld=lld"])
+    else:
+        env.Append(LIBPATH=[ngspice_native_library_directory])
+        env.Append(LIBS=["ngspice"])
+    if env["platform"] == "linux":
+        # RUNPATH order matters: $ORIGIN first so a release artifact that
+        # bundles libngspice.so next to libspice3d.so resolves without
+        # LD_LIBRARY_PATH. The dev-checkout path is the fallback for local
+        # builds where libngspice.so wasn't copied into project/bin/linux/.
+        env.Append(RPATH=[
+            env.Literal("\\$$ORIGIN"),
+            env.Literal("\\$$ORIGIN/../../../third_party/ngspice/build-native/src/.libs"),
+        ])
+    elif env["platform"] == "macos":
+        # macOS uses @loader_path (the directory of the loading binary)
+        # instead of $ORIGIN, and -install_name on the dylib is what the
+        # GDExtension records as its dependency path. We set the GDExtension
+        # to look in @loader_path first (for bundled libngspice.dylib next
+        # to libspice3d.dylib) then fall back to the dev-checkout path.
+        env.Append(LINKFLAGS=[
+            "-Wl,-rpath,@loader_path",
+            "-Wl,-rpath,@loader_path/../../../third_party/ngspice/build-native/src/.libs",
+        ])
 
 # xschem2spice ships a tiny CLI driver in xschem2spice.c that has its own
 # main() — exclude it. We link the library sources directly into the

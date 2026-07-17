@@ -1,5 +1,8 @@
 #include "spice3d_node.h"
 
+#include <algorithm>
+#include <cctype>
+
 #include "godot_cpp/classes/input_event_mouse_button.hpp"
 #include "godot_cpp/classes/java_script_bridge.hpp"
 #include "godot_cpp/classes/json.hpp"
@@ -104,24 +107,6 @@ std::vector<std::string> packed_string_array_to_std_vector(
 	return std_vector;
 }
 
-#ifdef WEB_ENABLED
-godot::String json_encode_packed_string_array(const godot::PackedStringArray &lines) {
-	godot::String accumulator = godot::String("[");
-	for (int line_index = 0; line_index < lines.size(); ++line_index) {
-		if (line_index > 0) accumulator += godot::String(",");
-		godot::String escaped_line = lines[line_index]
-				.replace("\\", "\\\\")
-				.replace("\"", "\\\"")
-				.replace("\n", "\\n")
-				.replace("\r", "\\r")
-				.replace("\t", "\\t");
-		accumulator += godot::String("\"") + escaped_line + godot::String("\"");
-	}
-	accumulator += godot::String("]");
-	return accumulator;
-}
-#endif
-
 } // namespace
 
 void Spice3DNode::_bind_methods() {
@@ -171,26 +156,29 @@ void Spice3DNode::_bind_methods() {
 					"extra_symbol_search_directories"),
 			&Spice3DNode::generate_spice_netlist_for_schematic_file);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed",
-					"netlist_lines", "timestep_seconds", "internal_net_names_to_seed_at_half_vdd"),
-			&Spice3DNode::push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed);
+			godot::D_METHOD("start_transient_analysis_with_netlist_and_seed_ic_nets",
+					"netlist_lines", "transient_timestep_seconds", "internal_net_names_to_seed_at_half_vdd"),
+			&Spice3DNode::start_transient_analysis_with_netlist_and_seed_ic_nets);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("update_time_warp_timestep_on_web_simulator", "timestep_seconds"),
-			&Spice3DNode::update_time_warp_timestep_on_web_simulator);
+			godot::D_METHOD("update_transient_timestep_mid_simulation", "new_timestep_seconds"),
+			&Spice3DNode::update_transient_timestep_mid_simulation);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("halt_simulation_on_web_simulator"),
-			&Spice3DNode::halt_simulation_on_web_simulator);
+			godot::D_METHOD("stop_simulation"),
+			&Spice3DNode::stop_simulation);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("set_external_voltage_source_on_web_simulator", "source_name", "volts"),
-			&Spice3DNode::set_external_voltage_source_on_web_simulator);
+			godot::D_METHOD("set_external_voltage_source", "source_name", "volts"),
+			&Spice3DNode::set_external_voltage_source);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("drain_buffered_simulation_samples_from_web_simulator"),
-			&Spice3DNode::drain_buffered_simulation_samples_from_web_simulator);
+			godot::D_METHOD("drain_buffered_simulation_samples_as_godot_array"),
+			&Spice3DNode::drain_buffered_simulation_samples_as_godot_array);
 	godot::ClassDB::bind_method(
-			godot::D_METHOD("install_file_text_in_web_simulator_filesystem",
-					"virtual_path_inside_worker_filesystem",
-					"file_content_text"),
-			&Spice3DNode::install_file_text_in_web_simulator_filesystem);
+			godot::D_METHOD("expose_persistent_directory_to_simulator",
+					"user_relative_directory_path"),
+			&Spice3DNode::expose_persistent_directory_to_simulator);
+	godot::ClassDB::bind_method(
+			godot::D_METHOD("resolve_simulator_include_path_for_persistent_resource",
+					"user_relative_path"),
+			&Spice3DNode::resolve_simulator_include_path_for_persistent_resource);
 	godot::ClassDB::bind_method(
 			godot::D_METHOD("apply_node_voltages_to_wire_colors",
 					"schematic_root_node",
@@ -231,10 +219,8 @@ godot::String Spice3DNode::describe_simulator_backend() {
 	}
 #ifdef WEB_ENABLED
 	return godot::String("web (JavaScriptBridge to ngspice Worker)");
-#elif defined(SPICE3D_HAVE_LIBNGSPICE)
-	return godot::String("native (libngspice)");
 #else
-	return godot::String("native (stub, libngspice not linked)");
+	return godot::String("native (libngspice)");
 #endif
 }
 
@@ -379,88 +365,54 @@ godot::PackedStringArray Spice3DNode::generate_spice_netlist_for_schematic_file(
 	return netlist_lines_as_packed_string_array;
 }
 
-bool Spice3DNode::push_netlist_lines_to_web_simulator_with_timestep_and_internal_nets_to_seed(
+bool Spice3DNode::start_transient_analysis_with_netlist_and_seed_ic_nets(
 		const godot::PackedStringArray &netlist_lines,
-		double timestep_seconds,
+		double transient_timestep_seconds,
 		const godot::PackedStringArray &internal_net_names_to_seed_at_half_vdd) {
-#ifdef WEB_ENABLED
-	const godot::String json_encoded_lines = json_encode_packed_string_array(netlist_lines);
-	const godot::String json_encoded_internal_nets = json_encode_packed_string_array(
-			internal_net_names_to_seed_at_half_vdd);
-	const godot::String javascript_to_evaluate = godot::String(
-			"globalThis.spice3d && globalThis.spice3d.loadNetlistLinesWithTimestepAndInternalNetsToSeed("
-			) + json_encoded_lines + godot::String(",")
-			+ godot::String::num(timestep_seconds) + godot::String(",")
-			+ json_encoded_internal_nets + godot::String(");");
-	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
-	return true;
-#else
-	(void)netlist_lines;
-	(void)timestep_seconds;
-	(void)internal_net_names_to_seed_at_half_vdd;
-	return false;
-#endif
+	if (!simulator) {
+		simulator = SpiceSimulator::create_for_current_platform();
+	}
+	return simulator->start_transient_analysis_with_netlist_and_seed_ic_nets(
+			packed_string_array_to_std_vector(netlist_lines),
+			transient_timestep_seconds,
+			packed_string_array_to_std_vector(internal_net_names_to_seed_at_half_vdd));
 }
 
-bool Spice3DNode::update_time_warp_timestep_on_web_simulator(double timestep_seconds) {
-#ifdef WEB_ENABLED
-	const godot::String javascript_to_evaluate =
-			godot::String("globalThis.spice3d && globalThis.spice3d.updateTimeWarpTimestep(")
-			+ godot::String::num(timestep_seconds) + godot::String(");");
-	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
-	return true;
-#else
-	(void)timestep_seconds;
-	return false;
-#endif
+bool Spice3DNode::update_transient_timestep_mid_simulation(double new_timestep_seconds) {
+	if (!simulator) return false;
+	return simulator->update_transient_timestep_mid_simulation(new_timestep_seconds);
 }
 
-void Spice3DNode::halt_simulation_on_web_simulator() {
-#ifdef WEB_ENABLED
-	godot::JavaScriptBridge::get_singleton()->eval(
-			"globalThis.spice3d && globalThis.spice3d.stopSimulation();");
-#endif
+void Spice3DNode::stop_simulation() {
+	if (!simulator) return;
+	simulator->stop_simulation();
 }
 
-void Spice3DNode::set_external_voltage_source_on_web_simulator(
-		const godot::String &source_name, double volts) {
-#ifdef WEB_ENABLED
-	const godot::String javascript_to_evaluate =
-			godot::String("globalThis.spice3d && globalThis.spice3d.setExternalVoltageSource(\"")
-			+ source_name.replace("\\", "\\\\").replace("\"", "\\\"")
-			+ godot::String("\",") + godot::String::num(volts) + godot::String(");");
-	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
-#else
-	(void)source_name;
-	(void)volts;
-#endif
+void Spice3DNode::set_external_voltage_source(const godot::String &source_name, double volts) {
+	if (!simulator) return;
+	simulator->set_external_voltage_source(godot_string_to_std_string(source_name), volts);
 }
 
-bool Spice3DNode::install_file_text_in_web_simulator_filesystem(
-		const godot::String &virtual_path_inside_worker_filesystem,
-		const godot::String &file_content_text) {
-#ifdef WEB_ENABLED
-	const godot::String escaped_virtual_path = virtual_path_inside_worker_filesystem
-			.replace("\\", "\\\\").replace("\"", "\\\"");
-	const godot::String javascript_to_evaluate = godot::String(
-			"globalThis.spice3d && globalThis.spice3d.installFileTextInWorkerFilesystem(")
-			+ godot::String("\"") + escaped_virtual_path + godot::String("\",")
-			+ godot::String("globalThis.__spice3dStagingFileContent || \"\");");
-	const godot::String set_content_javascript = godot::String(
-			"globalThis.__spice3dStagingFileContent = ")
-			+ godot::JSON::stringify(file_content_text) + godot::String(";");
-	godot::JavaScriptBridge::get_singleton()->eval(set_content_javascript);
-	godot::JavaScriptBridge::get_singleton()->eval(javascript_to_evaluate);
-	godot::JavaScriptBridge::get_singleton()->eval("globalThis.__spice3dStagingFileContent = null;");
-	return true;
-#else
-	(void)virtual_path_inside_worker_filesystem;
-	(void)file_content_text;
-	return false;
-#endif
+void Spice3DNode::expose_persistent_directory_to_simulator(
+		const godot::String &user_relative_directory_path) {
+	if (!simulator) {
+		simulator = SpiceSimulator::create_for_current_platform();
+	}
+	simulator->expose_persistent_directory_to_simulator(
+			godot_string_to_std_string(user_relative_directory_path));
 }
 
-godot::Array Spice3DNode::drain_buffered_simulation_samples_from_web_simulator() {
+godot::String Spice3DNode::resolve_simulator_include_path_for_persistent_resource(
+		const godot::String &user_relative_path) {
+	if (!simulator) {
+		simulator = SpiceSimulator::create_for_current_platform();
+	}
+	const std::string resolved = simulator->resolve_simulator_include_path_for_persistent_resource(
+			godot_string_to_std_string(user_relative_path));
+	return godot::String(resolved.c_str());
+}
+
+godot::Array Spice3DNode::drain_buffered_simulation_samples_as_godot_array() {
 	godot::Array drained_samples_as_godot_array;
 #ifdef WEB_ENABLED
 	const godot::Variant returned_value = godot::JavaScriptBridge::get_singleton()->eval(
@@ -472,6 +424,33 @@ godot::Array Spice3DNode::drain_buffered_simulation_samples_from_web_simulator()
 		if (parsed.get_type() == godot::Variant::ARRAY) {
 			drained_samples_as_godot_array = static_cast<godot::Array>(parsed);
 		}
+	}
+#else
+	if (!simulator) return drained_samples_as_godot_array;
+	const SimulationNodeNames *node_names_ptr = simulator->get_node_names_when_ready();
+	const std::vector<SimulationSample> drained_native_samples = simulator->take_buffered_samples();
+	for (const SimulationSample &one_native_sample : drained_native_samples) {
+		godot::Dictionary node_voltages_by_name;
+		if (node_names_ptr != nullptr) {
+			const std::size_t pairable_node_count = std::min(
+					node_names_ptr->ordered_node_names.size(), one_native_sample.node_voltages.size());
+			for (std::size_t node_index = 0; node_index < pairable_node_count; ++node_index) {
+				std::string lowercased_node_name = node_names_ptr->ordered_node_names[node_index];
+				std::transform(
+						lowercased_node_name.begin(),
+						lowercased_node_name.end(),
+						lowercased_node_name.begin(),
+						[](unsigned char character) {
+							return static_cast<char>(std::tolower(character));
+						});
+				node_voltages_by_name[godot::String(lowercased_node_name.c_str())] =
+						one_native_sample.node_voltages[node_index];
+			}
+		}
+		godot::Dictionary one_decorated_sample;
+		one_decorated_sample["simulationTimeSeconds"] = one_native_sample.simulation_time_seconds;
+		one_decorated_sample["nodeVoltagesByName"] = node_voltages_by_name;
+		drained_samples_as_godot_array.push_back(one_decorated_sample);
 	}
 #endif
 	return drained_samples_as_godot_array;

@@ -1,5 +1,7 @@
 #pragma once
 
+#ifndef WEB_ENABLED
+
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -17,8 +19,15 @@ public:
 	LibngspiceSpiceSimulator();
 	~LibngspiceSpiceSimulator() override;
 
-	bool load_netlist_lines(const std::vector<std::string> &netlist_lines) override;
-	bool start_transient_analysis(double timestep_seconds, double stop_time_seconds) override;
+	void expose_persistent_directory_to_simulator(
+			const std::string &user_relative_directory_path) override;
+	std::string resolve_simulator_include_path_for_persistent_resource(
+			const std::string &user_relative_path) const override;
+	bool start_transient_analysis_with_netlist_and_seed_ic_nets(
+			const std::vector<std::string> &netlist_lines,
+			double transient_timestep_seconds,
+			const std::vector<std::string> &internal_net_names_to_seed_at_half_vdd) override;
+	bool update_transient_timestep_mid_simulation(double new_timestep_seconds) override;
 	void stop_simulation() override;
 	bool is_simulation_running() const override;
 	void set_external_voltage_source(const std::string &source_name, double volts) override;
@@ -51,7 +60,11 @@ private:
 	std::unordered_map<std::string, double> external_voltage_sources_by_name;
 
 	bool ngspice_has_been_initialized = false;
+
+	void wait_for_background_thread_to_finish_before_freeing_instance_state();
 };
 
 } // namespace native
 } // namespace spice3d
+
+#endif // !WEB_ENABLED

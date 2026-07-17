@@ -30,7 +30,7 @@ func test_external_voltage_source_keyword_passes_through_to_ngspice_unchanged() 
 		".ends",
 	])
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission, "sky130")
+			raw_xschem_emission, "sky130", "")
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_true(single_blob_for_inspection.contains("VBUTTON1 net1 VGND external"),
 			"`external` is a real ngspice source type under --with-ngshared; "
@@ -79,7 +79,7 @@ func test_only_outermost_subckt_wrapper_is_stripped_inner_subckts_survive() -> v
 		".ends",
 	])
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission, "sky130")
+			raw_xschem_emission, "sky130", "")
 	var single_blob := "\n".join(converted_lines)
 	assert_false(single_blob.contains(".subckt outer_cell"),
 			"The outer .subckt wrapper must be stripped so the testbench is top-level.")
@@ -107,7 +107,7 @@ func test_subckt_to_testbench_conversion_preserves_external_strips_subckt_wrappe
 		".end",
 	])
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission, "sky130")
+			raw_xschem_emission, "sky130", "")
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_false(single_blob_for_inspection.contains(".subckt button_test"),
 			"`.subckt button_test` wrapper header must be removed — ngspice needs a top-level testbench.")
@@ -155,7 +155,7 @@ func test_gf180mcu_spec_produces_5v_rails_and_correct_lib_path() -> void:
 		".end",
 	])
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission, "gf180mcu")
+			raw_xschem_emission, "gf180mcu", "")
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	assert_true(single_blob_for_inspection.contains(".lib /gf180mcuD/libs.tech/ngspice/sm141064.spice typical"),
 			"gf180mcu testbench must reference the gf180mcuD ngspice/sm141064.spice .lib at the typical corner.")
@@ -220,7 +220,7 @@ func test_additional_subckt_definition_lines_get_injected_after_testbench_rails_
 		".ends verilog_and_or",
 	])
 	var converted_lines: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission, "sky130", injected_subckt_definition_lines)
+			raw_xschem_emission, "sky130", "", injected_subckt_definition_lines)
 	var single_blob_for_inspection := "\n".join(converted_lines)
 	var injected_subckt_definition_position := single_blob_for_inspection.find(
 			".subckt verilog_and_or a b c y VGND VNB VPB VPWR")
@@ -248,8 +248,8 @@ func test_omitting_additional_subckt_definition_lines_preserves_previous_behavio
 		".ends",
 	])
 	var without_explicit_empty_array: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission, "sky130")
+			raw_xschem_emission, "sky130", "")
 	var with_explicit_empty_array: PackedStringArray = XschemNetlistTransformer.convert_subckt_netlist_to_top_level_testbench(
-			raw_xschem_emission, "sky130", PackedStringArray())
+			raw_xschem_emission, "sky130", "", PackedStringArray())
 	assert_eq(without_explicit_empty_array, with_explicit_empty_array,
 			"Default-arg form must produce identical output to explicit-empty-PackedStringArray form.")

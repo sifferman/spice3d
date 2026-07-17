@@ -1,97 +1,371 @@
 # For syntax, see https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
-# This workflow is triggered manually on the "Actions" tab on GitHub, and can be used to create releases.
+# Manual workflow that builds release-ready, standalone exported binaries
+# of the spice3d application for every native platform we ship. Trigger
+# from the Actions tab; download the merged `spice3d` artifact at the
+# end; attach to a GitHub Release.
+#
+# The web build is intentionally NOT covered here -- pages.yml builds and
+# deploys the web version to https://ethan.sifferman.dev/spice3d/.
 
-name: Make a GDExtension build for all supported platforms
+name: Make a native build for linux + macos + windows
 on:
   workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.4.1
+  GODOT_STATUS: stable
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        # A build is made for every possible combination of parameters
-        # You can add or remove entries from the arrays of each parameter to customize which builds you want to run.
-        # See https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/running-variations-of-jobs-in-a-workflow
-        target:
-          [
-            { platform: linux, arch: x86_64, os: ubuntu-22.04 },
-            { platform: linux, arch: x86_32, os: ubuntu-22.04 },
-            { platform: linux, arch: arm64, os: ubuntu-22.04-arm },
-            { platform: linux, arch: arm32, os: ubuntu-22.04-arm },
-            { platform: windows, arch: x86_64, os: windows-latest },
-            { platform: windows, arch: x86_32, os: windows-latest },
-            { platform: windows, arch: arm64, os: windows-latest },
-            { platform: macos, arch: universal, os: macos-latest },
-            { platform: android, arch: x86_64, os: ubuntu-22.04 },
-            { platform: android, arch: x86_32, os: ubuntu-22.04 },
-            { platform: android, arch: arm64, os: ubuntu-22.04 },
-            { platform: android, arch: arm32, os: ubuntu-22.04 },
-            { platform: ios, arch: arm64, os: macos-latest },
-            { platform: web, arch: wasm32, os: ubuntu-22.04 },
-          ]
-        target-type: [template_debug, template_release]
-        float-precision: [single]
+        include:
+          - target: { platform: linux, arch: x86_64, os: ubuntu-22.04 }
+            godot-platform: "Linux"
+            export-output-filename: "spice3d.x86_64"
+            bundle-subdir: "linux_amd64"
+          - target: { platform: macos, arch: universal, os: macos-latest }
+            godot-platform: "macOS"
+            export-output-filename: "spice3d.zip"
+            bundle-subdir: "macos_arm64"
+          - target: { platform: windows, arch: x86_64, os: windows-latest }
+            godot-platform: "Windows Desktop"
+            export-output-filename: "spice3d.exe"
+            bundle-subdir: "windows_amd64"
 
     runs-on: ${{ matrix.target.os }}
     steps:
-      # Clone this repository
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: true
 
-      # Add linux x86_32 toolchain
-      - name: Install multilib support
-        if: ${{ matrix.target.platform == 'linux' && matrix.target.arch == 'x86_32' }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
+      - name: Setup MSYS2 (windows only)
+        if: matrix.target.platform == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel
+            git
+            autoconf
+            automake
+            libtool
+            bison
+            flex
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-lld
+            mingw-w64-ucrt-x86_64-python
 
-      # Setup dependencies
+      - name: Install ngspice build prerequisites (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool bison flex
+
+      - name: Install ngspice build prerequisites (macos)
+        if: matrix.target.platform == 'macos'
+        shell: bash
+        run: |
+          brew install autoconf automake libtool bison
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+
       - name: Setup godot-cpp
         uses: ./godot-cpp/.github/actions/setup-godot-cpp
         with:
           platform: ${{ matrix.target.platform }}
-          em-version: 3.1.62
 
-      # Build GDExtension (with caches)
+      - name: Cache ngspice native build
+        id: cache_ngspice_native_build
+        uses: actions/cache@v4
+        with:
+          path: third_party/ngspice/build-native
+          key: ngspice-native-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ hashFiles('scripts/build-ngspice-for-native.sh', '.gitmodules') }}-${{ hashFiles('third_party/ngspice/configure.ac') }}
+
+      - name: Build ngspice for native (linux + macos)
+        if: (matrix.target.platform == 'linux' || matrix.target.platform == 'macos') && steps.cache_ngspice_native_build.outputs.cache-hit != 'true'
+        run: scripts/build-ngspice-for-native.sh
+
+      - name: Build ngspice for native (windows, inside MSYS2)
+        if: matrix.target.platform == 'windows' && steps.cache_ngspice_native_build.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: scripts/build-ngspice-for-native.sh
 
       - name: Restore .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-restore
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
-          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
+          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_debug_release
 
-      - name: Build GDExtension Debug Build
-        shell: sh
+      - name: Build GDExtension template_debug + template_release (linux + macos)
+        if: matrix.target.platform != 'windows'
         env:
           SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
+        shell: bash
         run: |
-          scons target=${{ matrix.target-type }} platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=${{ matrix.float-precision }}
+          set -e
+          PARALLEL_JOB_COUNT="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+          # Both targets are needed: Godot's headless --import loads the
+          # debug GDExtension to validate the project; --export-release uses
+          # the release one.
+          scons -j"$PARALLEL_JOB_COUNT" target=template_debug   platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single
+          scons -j"$PARALLEL_JOB_COUNT" target=template_release platform=${{ matrix.target.platform }} arch=${{ matrix.target.arch }} precision=single
+
+      - name: Build GDExtension template_debug + template_release (windows, in cmd)
+        if: matrix.target.platform == 'windows'
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache/
+        shell: cmd
+        run: |
+          scons -j%NUMBER_OF_PROCESSORS% target=template_debug   platform=windows arch=x86_64 precision=single
+          scons -j%NUMBER_OF_PROCESSORS% target=template_release platform=windows arch=x86_64 precision=single
 
       - name: Save .scons_cache
         uses: ./godot-cpp/.github/actions/godot-cache-save
         with:
           scons-cache: ${{ github.workspace }}/.scons-cache/
-          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_${{ matrix.float-precision }}_${{ matrix.target-type }}
+          cache-name: ${{ matrix.target.platform }}_${{ matrix.target.arch }}_debug_release
 
-      # Clean up compilation files
-      - name: Windows - Delete compilation files
-        if: ${{ matrix.target.platform == 'windows' }}
+      - name: Cache Godot editor binary and export templates
+        id: cache_godot_editor_and_templates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-editor
+            ~/godot-export-templates
+          key: godot-editor-and-templates-${{ matrix.target.platform }}-${{ env.GODOT_VERSION }}-${{ env.GODOT_STATUS }}
+
+      - name: Install Godot editor + export templates (linux)
+        if: matrix.target.platform == 'linux' && steps.cache_godot_editor_and_templates.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${GODOT_VERSION}-${GODOT_STATUS}"
+          base="https://github.com/godotengine/godot/releases/download/${ver}"
+          mkdir -p "$HOME/godot-editor"
+          curl -fsSL "${base}/Godot_v${ver}_linux.x86_64.zip" -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d "$HOME/godot-editor"
+          mv "$HOME/godot-editor/Godot_v${ver}_linux.x86_64" "$HOME/godot-editor/godot"
+          chmod +x "$HOME/godot-editor/godot"
+          curl -fsSL "${base}/Godot_v${ver}_export_templates.tpz" -o /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d "$HOME/godot-export-templates"
+
+      - name: Install Godot editor + export templates (macos)
+        if: matrix.target.platform == 'macos' && steps.cache_godot_editor_and_templates.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${GODOT_VERSION}-${GODOT_STATUS}"
+          base="https://github.com/godotengine/godot/releases/download/${ver}"
+          mkdir -p "$HOME/godot-editor"
+          curl -fsSL "${base}/Godot_v${ver}_macos.universal.zip" -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d "$HOME/godot-editor"
+          curl -fsSL "${base}/Godot_v${ver}_export_templates.tpz" -o /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d "$HOME/godot-export-templates"
+
+      - name: Install Godot editor + export templates (windows)
+        if: matrix.target.platform == 'windows' && steps.cache_godot_editor_and_templates.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Remove-Item bin/* -Include *.exp,*.lib,*.pdb -Force
+          $ver = "${env:GODOT_VERSION}-${env:GODOT_STATUS}"
+          $base = "https://github.com/godotengine/godot/releases/download/${ver}"
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\godot-editor" | Out-Null
+          Invoke-WebRequest "${base}/Godot_v${ver}_win64.exe.zip" -OutFile "$env:TEMP\godot.zip"
+          Expand-Archive -Force "$env:TEMP\godot.zip" -DestinationPath "$env:USERPROFILE\godot-editor"
+          Invoke-WebRequest "${base}/Godot_v${ver}_export_templates.tpz" -OutFile "$env:TEMP\templates.tpz"
+          Rename-Item "$env:TEMP\templates.tpz" "$env:TEMP\templates.zip"
+          Expand-Archive -Force "$env:TEMP\templates.zip" -DestinationPath "$env:USERPROFILE\godot-export-templates"
 
-      # Upload the build
+      - name: Stage export templates into the Godot expected location (unix)
+        if: matrix.target.platform != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
+          if [ "${{ matrix.target.platform }}" = "macos" ]; then
+            target_dir="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
+          fi
+          mkdir -p "$target_dir"
+          cp -r "$HOME/godot-export-templates/templates/"* "$target_dir/"
+          ls "$target_dir" | head -20
+
+      - name: Stage export templates into the Godot expected location (windows)
+        if: matrix.target.platform == 'windows'
+        shell: pwsh
+        run: |
+          $target = "$env:APPDATA\Godot\export_templates\${env:GODOT_VERSION}.${env:GODOT_STATUS}"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Copy-Item -Recurse -Force "$env:USERPROFILE\godot-export-templates\templates\*" $target
+          Get-ChildItem $target | Select-Object -First 10 | Out-Host
+
+      - name: Pre-stage libngspice next to GDExtension before import (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: cp -d third_party/ngspice/build-native/src/.libs/libngspice.so* project/bin/linux/
+
+      - name: Pre-stage libngspice next to GDExtension before import (macos)
+        if: matrix.target.platform == 'macos'
+        shell: bash
+        run: cp -P third_party/ngspice/build-native/src/.libs/libngspice*.dylib project/bin/macos/
+
+      - name: Pre-stage libngspice next to GDExtension before import (windows)
+        if: matrix.target.platform == 'windows'
+        shell: bash
+        run: cp third_party/ngspice/build-native/src/.libs/libngspice*.dll project/bin/windows/
+
+      - name: Replace POSIX symlink at project/addons/gut with a real directory (windows)
+        if: matrix.target.platform == 'windows'
+        shell: pwsh
+        run: |
+          $symlinkProxyFile = "project\addons\gut"
+          if (Test-Path $symlinkProxyFile -PathType Leaf) {
+              Remove-Item -Force $symlinkProxyFile
+          } elseif (Test-Path $symlinkProxyFile) {
+              Remove-Item -Recurse -Force $symlinkProxyFile
+          }
+          Copy-Item -Recurse -Force "third_party\gut\addons\gut" "project\addons\gut"
+          Get-ChildItem "project\addons\gut" | Select-Object -First 5 | Out-Host
+
+      - name: Run Godot project import (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: |
+          set -e
+          cd project
+          "$HOME/godot-editor/godot" --headless --import 2>&1 | tail -20
+
+      - name: Run Godot project import (macos)
+        if: matrix.target.platform == 'macos'
+        shell: bash
+        run: |
+          set -e
+          cd project
+          "$HOME/godot-editor/Godot.app/Contents/MacOS/Godot" --headless --import 2>&1 | tail -20
+
+      - name: Run Godot project import (windows)
+        if: matrix.target.platform == 'windows'
+        shell: pwsh
+        run: |
+          $gdextensionRuntimeLibraryDirectoryForWindows = (Resolve-Path "project\bin\windows").Path
+          $env:PATH = "$gdextensionRuntimeLibraryDirectoryForWindows;$env:PATH"
+          cd project
+          $editor = Get-ChildItem "$env:USERPROFILE\godot-editor" -Filter "*.exe" -Recurse | Select-Object -First 1
+          & $editor.FullName --headless --import 2>&1 | Select-Object -Last 40
+
+      - name: Export with Godot (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p build-out/${{ matrix.target.platform }}
+          cd project
+          "$HOME/godot-editor/godot" --headless --export-release "${{ matrix.godot-platform }}" "../build-out/${{ matrix.target.platform }}/${{ matrix.export-output-filename }}" 2>&1 | tail -30
+
+      - name: Export with Godot (macos)
+        if: matrix.target.platform == 'macos'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p build-out/${{ matrix.target.platform }}
+          cd project
+          "$HOME/godot-editor/Godot.app/Contents/MacOS/Godot" --headless --export-release "${{ matrix.godot-platform }}" "../build-out/${{ matrix.target.platform }}/${{ matrix.export-output-filename }}" 2>&1 | tail -30
+
+      - name: Export with Godot (windows)
+        if: matrix.target.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "build-out\windows" | Out-Null
+          $gdextensionRuntimeLibraryDirectoryForWindows = (Resolve-Path "project\bin\windows").Path
+          $env:PATH = "$gdextensionRuntimeLibraryDirectoryForWindows;$env:PATH"
+          cd project
+          $editor = Get-ChildItem "$env:USERPROFILE\godot-editor" -Filter "*.exe" -Recurse | Select-Object -First 1
+          & $editor.FullName --headless --export-release "${{ matrix.godot-platform }}" "..\build-out\windows\${{ matrix.export-output-filename }}" 2>&1 | Select-Object -Last 40
+
+      - name: Relocate GDExtension shared object to match manifest path (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Godot's desktop export drops the GDExtension shared object at the
+          # export root, but the .pck manifest still resolves to
+          # res://bin/linux/libspice3d... — so at runtime Godot fails with
+          # "Can't open dynamic library". Move it into bin/linux/ to match.
+          mkdir -p build-out/linux/bin/linux
+          mv build-out/linux/libspice3d.linux.template_release.x86_64.so build-out/linux/bin/linux/
+
+      - name: Bundle libngspice next to the relocated GDExtension (linux)
+        if: matrix.target.platform == 'linux'
+        shell: bash
+        run: |
+          set -e
+          cp -d third_party/ngspice/build-native/src/.libs/libngspice.so* build-out/linux/bin/linux/
+          ls -la build-out/linux/
+          ls -la build-out/linux/bin/linux/
+
+      - name: Bundle libngspice next to the exported binary (macos)
+        if: matrix.target.platform == 'macos'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p build-out/macos/extracted
+          unzip -o build-out/macos/spice3d.zip -d build-out/macos/extracted
+          frameworks_dir="build-out/macos/extracted/spice3d.app/Contents/Frameworks"
+          mkdir -p "$frameworks_dir"
+          cp -P third_party/ngspice/build-native/src/.libs/libngspice*.dylib "$frameworks_dir/"
+          (cd build-out/macos/extracted && zip -r ../spice3d.zip spice3d.app)
+          rm -rf build-out/macos/extracted
+          ls -la build-out/macos/
+
+      - name: Relocate GDExtension shared object to match manifest path (windows)
+        if: matrix.target.platform == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-out/windows/bin/windows
+          mv build-out/windows/spice3d.windows.template_release.x86_64.dll build-out/windows/bin/windows/
+
+      - name: Bundle libngspice next to the exported binary (windows)
+        if: matrix.target.platform == 'windows'
+        shell: bash
+        run: |
+          set -e
+          # libngspice-0.dll stays next to spice3d.exe so Windows' DLL search
+          # (which checks the loading EXE's directory) can resolve it when
+          # bin/windows/spice3d.windows...dll declares it as an import.
+          cp third_party/ngspice/build-native/src/.libs/libngspice*.dll build-out/windows/
+          ls -la build-out/windows/
+          ls -la build-out/windows/bin/windows/
+
+      - name: Bundle MinGW UCRT64 runtime DLLs that libngspice-0.dll depends on (windows)
+        if: matrix.target.platform == 'windows'
+        shell: msys2 {0}
+        run: |
+          # libngspice-0.dll was built by autotools without -static-libgcc /
+          # -static-libstdc++, so it imports libgcc_s_seh-1.dll, libstdc++-6.dll,
+          # and libwinpthread-1.dll from MSYS2's ucrt64. Vanilla Windows machines
+          # don't have these, so dlopen fails with Error 126. Ship them next
+          # to spice3d.exe so Windows' DLL search resolves them.
+          set -e
+          cp /ucrt64/bin/libgcc_s_seh-1.dll build-out/windows/
+          cp /ucrt64/bin/libstdc++-6.dll   build-out/windows/
+          cp /ucrt64/bin/libwinpthread-1.dll build-out/windows/
+          ls -la build-out/windows/
+
+      - name: Restage build output under bundle-subdir for merge layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact-staging
+          mv "build-out/${{ matrix.target.platform }}" "artifact-staging/${{ matrix.bundle-subdir }}"
+          ls -la "artifact-staging/${{ matrix.bundle-subdir }}/"
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: spice3d-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.float-precision }}-${{ matrix.target-type }}
-          path: |
-            ${{ github.workspace }}/bin/**
+          name: spice3d-${{ matrix.bundle-subdir }}
+          path: artifact-staging
 
-  # Merges all the build artifacts together into a single spice3d artifact.
-  # If you comment out this step, all the builds will be uploaded individually.
   merge:
     runs-on: ubuntu-22.04
     needs: build

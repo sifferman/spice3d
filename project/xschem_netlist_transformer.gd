@@ -160,17 +160,21 @@ static func strip_empty_parameter_assignments_from_one_spice_line(spice_line: St
 static func convert_subckt_netlist_to_top_level_testbench(
 		raw_xschem_netlist_lines: PackedStringArray,
 		pdk_family_name: String,
+		simulator_include_path_prefix_for_pdk_root: String,
 		additional_subckt_definition_lines_to_inject_after_rails: PackedStringArray = PackedStringArray()
 		) -> PackedStringArray:
 	var spec := netlist_spec_for(pdk_family_name)
 	var top_level_testbench_lines := PackedStringArray()
 	for one_include_path_before_lib in spec["extra_include_paths_to_prepend_before_dot_lib_directive"]:
-		top_level_testbench_lines.append(".include %s" % one_include_path_before_lib)
-	top_level_testbench_lines.append(".lib %s %s" % [
+		top_level_testbench_lines.append(".include %s%s" % [
+				simulator_include_path_prefix_for_pdk_root, one_include_path_before_lib])
+	top_level_testbench_lines.append(".lib %s%s %s" % [
+			simulator_include_path_prefix_for_pdk_root,
 			spec["top_level_lib_spice_virtual_path_in_worker"],
 			spec["lib_corner_name"]])
 	for one_include_path_after_lib in spec["extra_include_paths_to_append_after_dot_lib_directive"]:
-		top_level_testbench_lines.append(".include %s" % one_include_path_after_lib)
+		top_level_testbench_lines.append(".include %s%s" % [
+				simulator_include_path_prefix_for_pdk_root, one_include_path_after_lib])
 	top_level_testbench_lines.append_array(
 			PackedStringArray(spec["testbench_rail_voltage_definition_lines"]))
 	top_level_testbench_lines.append_array(additional_subckt_definition_lines_to_inject_after_rails)

@@ -87,6 +87,24 @@ target_include_directories(${LIBNAME}
     third_party/xschem2spice/src
 )
 
+if(NOT GODOTCPP_PLATFORM STREQUAL "web")
+    set(NGSPICE_NATIVE_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/third_party/ngspice/src/include")
+    set(NGSPICE_NATIVE_LIB_DIR "${CMAKE_CURRENT_LIST_DIR}/third_party/ngspice/build-native/src/.libs")
+    set(NGSPICE_NATIVE_SHARED_LIBRARY "${NGSPICE_NATIVE_LIB_DIR}/libngspice.so")
+    if(NOT EXISTS "${NGSPICE_NATIVE_SHARED_LIBRARY}")
+        message(FATAL_ERROR
+            "ngspice native build is missing.\n"
+            "Run scripts/build-ngspice-for-native.sh before configuring CMake for a native target.")
+    endif()
+    target_include_directories(${LIBNAME} PRIVATE "${NGSPICE_NATIVE_INCLUDE_DIR}")
+    target_link_directories(${LIBNAME} PRIVATE "${NGSPICE_NATIVE_LIB_DIR}")
+    target_link_libraries(${LIBNAME} PRIVATE ngspice)
+    set_target_properties(${LIBNAME} PROPERTIES
+        BUILD_RPATH "$ORIGIN/../../../third_party/ngspice/build-native/src/.libs"
+        INSTALL_RPATH "$ORIGIN/../../../third_party/ngspice/build-native/src/.libs"
+    )
+endif()
+
 # Fetch a list of the xml files to use for documentation and add to our target
 file(GLOB_RECURSE DOC_XML LIST_DIRECTORIES NO CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/doc_classes/*.xml")
 
