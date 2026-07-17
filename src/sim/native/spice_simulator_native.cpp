@@ -141,6 +141,23 @@ constexpr double EFFECTIVELY_UNBOUNDED_TRANSIENT_STOP_TIME_SECONDS = 1.0e6;
 constexpr double SEED_INITIAL_CONDITION_HIGH_VOLTS = 1.8;
 constexpr double SEED_INITIAL_CONDITION_LOW_VOLTS = 0.0;
 
+// Kept parallel to NGSPICE_OPTION_COMMANDS_FOR_LOOSE_RUN_PHASE in
+// project/web/ngspice_worker.js. The web variant runs a 50-step
+// full-precision bootstrap first (via .tran + step + bg_run) to break
+// metastable equilibria before relaxing; native uses bg_tran which starts
+// the analysis directly, so no equivalent bootstrap phase exists here.
+const char *const NGSPICE_OPTION_COMMANDS_FOR_LOOSE_RUN_PHASE[] = {
+	"option reltol=1e-2",
+	"option abstol=1e-8",
+	"option vntol=1e-3",
+	"option chgtol=1e-12",
+	"option trtol=50",
+	"option bypass=1",
+	"option gmin=1e-9",
+	"option itl4=200",
+	"option maxord=2",
+};
+
 bool load_netlist_lines_into_ngspice(
 		const std::vector<std::string> &netlist_lines,
 		bool &ngspice_has_been_initialized_flag,
@@ -273,12 +290,19 @@ bool load_netlist_lines_into_ngspice(
 	return ngSpice_Circ(netlist_argv.data()) == 0;
 }
 
+void apply_loose_run_phase_options_via_runtime_commands() {
+	for (const char *one_option_command : NGSPICE_OPTION_COMMANDS_FOR_LOOSE_RUN_PHASE) {
+		ngSpice_Command(const_cast<char *>(one_option_command));
+	}
+}
+
 bool start_or_restart_background_transient(
 		double transient_timestep_seconds,
 		double stop_time_seconds,
 		bool use_initial_conditions) {
 	ngSpice_Command(const_cast<char *>("save none"));
 	ngSpice_Command(const_cast<char *>("esave node"));
+	apply_loose_run_phase_options_via_runtime_commands();
 
 	char transient_command_buffer[160];
 	std::snprintf(
