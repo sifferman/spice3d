@@ -24,6 +24,11 @@ apply_configure_patches_for_emscripten() {
     cd "$ngspice_source_root"
     if grep -q 'AC_CHECK_FUNCS(\[times getrusage\])' configure.ac; then
         sed -i 's/AC_CHECK_FUNCS(\[times getrusage\])/AC_CHECK_FUNCS([times])/g' configure.ac
+        # A prior native build in the same checkout may have already run
+        # autogen.sh against the unpatched configure.ac and left a stale
+        # ./configure behind. Drop it so regenerate_configure_script_if_missing
+        # rebuilds it from the just-patched configure.ac.
+        rm -f "$ngspice_source_root/configure"
     fi
 }
 
