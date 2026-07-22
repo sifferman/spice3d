@@ -28,6 +28,22 @@ namespace native {
 
 namespace {
 
+// libngspice's background thread can fire callbacks (send_char, send_data, ...)
+// concurrently with, and even briefly AFTER, bg_halt returns and our
+// background_thread_running callback flips to false. Without a synchronization
+// gate a lagging callback dereferences a freed LibngspiceSpiceSimulator via
+// user_data and corrupts the heap — reproduced as "double free or corruption"
+// in test_netlist_transformer, which runs after test_native_simulator_transient
+// has autofree'd its Spice3DNode. The gate below (mutex + validity flag) makes
+// callbacks either dispatch under the lock while the instance is guaranteed
+// alive, or short-circuit as a no-op if the instance is being torn down.
+std::mutex &get_ngspice_callback_dispatch_mutex() {
+	static std::mutex ngspice_callback_dispatch_mutex;
+	return ngspice_callback_dispatch_mutex;
+}
+
+std::atomic<LibngspiceSpiceSimulator *> currently_registered_simulator_or_null{nullptr};
+
 std::string to_lowercase_copy(std::string original_text) {
 	std::transform(
 			original_text.begin(),
@@ -39,32 +55,58 @@ std::string to_lowercase_copy(std::string original_text) {
 	return original_text;
 }
 
-LibngspiceSpiceSimulator *get_simulator_from_user_data(void *user_data_pointer) {
-	return static_cast<LibngspiceSpiceSimulator *>(user_data_pointer);
+LibngspiceSpiceSimulator *acquire_currently_registered_simulator_under_dispatch_lock(
+		void *user_data_pointer, std::unique_lock<std::mutex> &dispatch_lock) {
+	dispatch_lock = std::unique_lock<std::mutex>(get_ngspice_callback_dispatch_mutex());
+	LibngspiceSpiceSimulator *const registered = currently_registered_simulator_or_null.load();
+	if (registered == nullptr) return nullptr;
+	if (user_data_pointer != nullptr && user_data_pointer != registered) return nullptr;
+	return registered;
 }
 
 int ngspice_send_char_callback(char *message_text, int, void *user_data_pointer) {
-	if (user_data_pointer) get_simulator_from_user_data(user_data_pointer)->receive_log_message(message_text);
+	std::unique_lock<std::mutex> dispatch_lock;
+	if (LibngspiceSpiceSimulator *sim = acquire_currently_registered_simulator_under_dispatch_lock(user_data_pointer, dispatch_lock)) {
+		sim->receive_log_message(message_text);
+	}
 	return 0;
 }
 
 int ngspice_send_stat_callback(char *message_text, int, void *user_data_pointer) {
-	if (user_data_pointer) get_simulator_from_user_data(user_data_pointer)->receive_status_message(message_text);
+	std::unique_lock<std::mutex> dispatch_lock;
+	if (LibngspiceSpiceSimulator *sim = acquire_currently_registered_simulator_under_dispatch_lock(user_data_pointer, dispatch_lock)) {
+		sim->receive_status_message(message_text);
+	}
 	return 0;
 }
 
 int ngspice_controlled_exit_callback(int exit_status, NG_BOOL, NG_BOOL, int, void *user_data_pointer) {
-	if (user_data_pointer) get_simulator_from_user_data(user_data_pointer)->receive_controlled_exit_status(exit_status);
+	std::unique_lock<std::mutex> dispatch_lock;
+	if (LibngspiceSpiceSimulator *sim = acquire_currently_registered_simulator_under_dispatch_lock(user_data_pointer, dispatch_lock)) {
+		sim->receive_controlled_exit_status(exit_status);
+	}
 	return 0;
 }
 
-int ngspice_background_thread_running_callback(NG_BOOL is_now_running, int, void *user_data_pointer) {
-	if (user_data_pointer) get_simulator_from_user_data(user_data_pointer)->receive_background_thread_running_state(is_now_running);
+int ngspice_background_thread_running_callback(NG_BOOL background_thread_has_exited_flag, int, void *user_data_pointer) {
+	// libngspice's BGThreadRunning callback (see third_party/ngspice
+	// sharedspice.c _thread_run) is invoked with fl_exited — i.e. the flag
+	// is TRUE when the thread has *finished*, not when it is running. Invert
+	// here so downstream sees the intuitive "is currently running" state.
+	const bool background_thread_is_now_running = !background_thread_has_exited_flag;
+	std::unique_lock<std::mutex> dispatch_lock;
+	if (LibngspiceSpiceSimulator *sim = acquire_currently_registered_simulator_under_dispatch_lock(user_data_pointer, dispatch_lock)) {
+		sim->receive_background_thread_running_state(background_thread_is_now_running);
+	}
 	return 0;
 }
 
 int ngspice_send_data_callback(pvecvaluesall all_vector_values, int, int, void *user_data_pointer) {
-	if (!user_data_pointer || !all_vector_values) return 0;
+	if (!all_vector_values) return 0;
+
+	std::unique_lock<std::mutex> dispatch_lock;
+	LibngspiceSpiceSimulator *const sim = acquire_currently_registered_simulator_under_dispatch_lock(user_data_pointer, dispatch_lock);
+	if (sim == nullptr) return 0;
 
 	const int vector_count = all_vector_values->veccount;
 	std::vector<const char *> vector_names(vector_count);
@@ -79,25 +121,27 @@ int ngspice_send_data_callback(pvecvaluesall all_vector_values, int, int, void *
 		}
 	}
 
-	get_simulator_from_user_data(user_data_pointer)
-			->receive_simulation_sample(
-					simulation_time_seconds,
-					vector_names.data(),
-					vector_values.data(),
-					vector_count);
+	sim->receive_simulation_sample(
+			simulation_time_seconds,
+			vector_names.data(),
+			vector_values.data(),
+			vector_count);
 	return 0;
 }
 
 int ngspice_send_init_data_callback(pvecinfoall init_info, int, void *user_data_pointer) {
-	if (!user_data_pointer || !init_info) return 0;
+	if (!init_info) return 0;
+
+	std::unique_lock<std::mutex> dispatch_lock;
+	LibngspiceSpiceSimulator *const sim = acquire_currently_registered_simulator_under_dispatch_lock(user_data_pointer, dispatch_lock);
+	if (sim == nullptr) return 0;
 
 	const int vector_count = init_info->veccount;
 	std::vector<const char *> vector_names(vector_count);
 	for (int vector_index = 0; vector_index < vector_count; ++vector_index) {
 		vector_names[vector_index] = init_info->vecs[vector_index] ? init_info->vecs[vector_index]->vecname : "";
 	}
-	get_simulator_from_user_data(user_data_pointer)
-			->receive_node_names(vector_names.data(), vector_count);
+	sim->receive_node_names(vector_names.data(), vector_count);
 	return 0;
 }
 
@@ -107,22 +151,33 @@ int ngspice_get_voltage_source_data_callback(
 		char *source_node_name,
 		int,
 		void *user_data_pointer) {
-	if (!user_data_pointer || !value_to_write) return 0;
-	get_simulator_from_user_data(user_data_pointer)
-			->provide_external_voltage_value(
-					value_to_write,
-					simulation_time_seconds,
-					source_node_name);
+	if (!value_to_write) return 0;
+
+	std::unique_lock<std::mutex> dispatch_lock;
+	if (LibngspiceSpiceSimulator *sim = acquire_currently_registered_simulator_under_dispatch_lock(user_data_pointer, dispatch_lock)) {
+		sim->provide_external_voltage_value(
+				value_to_write,
+				simulation_time_seconds,
+				source_node_name);
+	}
 	return 0;
 }
 
 } // namespace
 
-LibngspiceSpiceSimulator::LibngspiceSpiceSimulator() = default;
+LibngspiceSpiceSimulator::LibngspiceSpiceSimulator() {
+	currently_registered_simulator_or_null.store(this);
+}
 
 LibngspiceSpiceSimulator::~LibngspiceSpiceSimulator() {
 	stop_simulation();
 	wait_for_background_thread_to_finish_before_freeing_instance_state();
+	// Acquire the dispatch mutex before clearing the registration pointer so
+	// any callback currently mid-dispatch finishes running against this
+	// instance; subsequent lagging callbacks then see nullptr and short-circuit
+	// before touching now-freed instance state.
+	std::lock_guard<std::mutex> unregister_under_lock(get_ngspice_callback_dispatch_mutex());
+	currently_registered_simulator_or_null.store(nullptr);
 }
 
 void LibngspiceSpiceSimulator::wait_for_background_thread_to_finish_before_freeing_instance_state() {
@@ -130,7 +185,11 @@ void LibngspiceSpiceSimulator::wait_for_background_thread_to_finish_before_freei
 	for (int poll_attempt = 0;
 			poll_attempt < MAX_HUNDRED_MICROSECOND_POLLS_BEFORE_GIVING_UP_TO_AVOID_HANG;
 			++poll_attempt) {
-		if (!background_thread_is_running.load()) return;
+		// ngSpice_running() is authoritative for whether the bg thread is
+		// still executing; the atomic mirror only reflects state we've been
+		// notified about via the background_thread_running callback, which
+		// can lag or be skipped when bg_halt races the thread's own exit path.
+		if (!background_thread_is_running.load() && !ngSpice_running()) return;
 		std::this_thread::sleep_for(std::chrono::microseconds(100));
 	}
 }
@@ -300,8 +359,6 @@ bool start_or_restart_background_transient(
 		double transient_timestep_seconds,
 		double stop_time_seconds,
 		bool use_initial_conditions) {
-	ngSpice_Command(const_cast<char *>("save none"));
-	ngSpice_Command(const_cast<char *>("esave node"));
 	apply_loose_run_phase_options_via_runtime_commands();
 
 	char transient_command_buffer[160];
